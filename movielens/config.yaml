@@ -1,0 +1,41 @@
+# Training Pipeline Configuration
+# Used with TrainingPipeline for recommendation model training
+
+# Model architecture
+model:
+  n_latent: 64    # Latent factors/dimensions
+  sparse: false   # Sparse gradients for embeddings
+  init_std: 0.1   # Weight initialization std dev
+
+# Optimizer
+optimizer:
+  name: 'Adam'                     # 'Adam', 'SGD', 'AdamW', 'RMSprop'
+  lr: 0.001                        # Learning rate
+  weight_decay: 0.0001               # L2 regularization
+
+# Training
+training:
+  loss_function: 'bpr_loss'       # Loss function
+  n_iter: 3000                     # Training iterations
+  batch_size: 100                # Batch size
+  eval_every: 10                   # Evaluation frequency
+  n_eval_users: 10000              # Users to evaluate (null = all)
+  n_eval_items: null               # Neg candidates per eval user (null=all)
+  top_k: 20                       # Rank cutoff for NDCG/P/R metrics
+  early_stopping_patience: 1000   # Early stopping patience
+  log_level: 1                    # Logging verbosity
+
+# Data processing
+data:
+  item_feature: 'indicator'        # 'metadata', 'indicator', 'both'
+  train_ratio_pos: 0.8            # Positive train ratio
+
+# MLflow
+mlflow:
+  experiment_name: 'movielens-runs'  # Experiment name
+  tracking_uri: 'sqlite:///mlflow.db'    # Tracking URI
+
+# Comprehensive parameter sweep (all relevant parameters)
+sweep:
+  model.n_latent: [32, 64, 128]
+  data.item_feature: ['metadata', 'indicator', 'both']

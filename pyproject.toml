@@ -28,7 +28,6 @@ dependencies = [
     "scikit-learn",
     "torch",
     "mlflow",
-    "joblib",
     "pyyaml",
     "pathos",
 ]

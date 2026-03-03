@@ -6,22 +6,13 @@ Shows separation between data prep and model training.
 Reuse same UserItemData with different training configs.
 """
 
-import mlflow
 import numpy as np
 
 from pybpr import UserItemData, TrainingPipeline
 
-# Configure MLflow to use SQLite backend
-mlflow.set_tracking_uri("sqlite:///mlflow.db")
-
 
 def create_synthetic_data():
-    """
-    Create a simple synthetic dataset for demonstration.
-
-    Returns:
-        UserItemData object ready for training
-    """
+    """Create a simple synthetic dataset for demonstration."""
     # Generate synthetic interactions
     np.random.seed(42)
     n_users = 1000
@@ -36,7 +27,9 @@ def create_synthetic_data():
     ui = UserItemData(name='synthetic_dataset')
 
     # Add positive interactions
-    ui.add_positive_interactions(user_ids=user_ids, item_ids=item_ids)
+    ui.add_positive_interactions(
+        user_ids=user_ids, item_ids=item_ids
+    )
 
     # Add user features (identity)
     ui.add_user_features(
@@ -63,16 +56,14 @@ def example_1_basic_training():
     # Prepare data
     ui = create_synthetic_data()
 
-    # Create default config
+    # Create default config and run
     config = TrainingPipeline.create_default_config()
     config['training']['n_iter'] = 50
+    config['mlflow']['experiment_name'] = 'simple_pipeline_examples'
 
-    # Train with MLflow tracking
-    mlflow.set_experiment('simple_pipeline_examples')
     pipeline = TrainingPipeline(config=config)
-    with mlflow.start_run(run_name='example1_basic') as run:
-        recommender = pipeline.train(ui, mlflow_run=run)
-        print(f"\nMLflow run ID: {run.info.run_id}")
+    run_ids = pipeline.run(ui)
+    print(f"\nMLflow run ID: {run_ids[0]}")
 
 
 def example_2_config_file():
@@ -84,14 +75,10 @@ def example_2_config_file():
     # Prepare data
     ui = create_synthetic_data()
 
-    # Train using config file
-    mlflow.set_experiment('simple_pipeline_examples')
-    pipeline = TrainingPipeline(
-        config_path='examples/training_config.yaml'
-    )
-    with mlflow.start_run(run_name='example2_config') as run:
-        recommender = pipeline.train(ui, mlflow_run=run)
-        print(f"\nMLflow run ID: {run.info.run_id}")
+    # Train using config file (mlflow settings come from the file)
+    pipeline = TrainingPipeline(config_path='examples/config.yaml')
+    run_ids = pipeline.run(ui)
+    print(f"\nMLflow run ID: {run_ids[0]}")
 
 
 def example_3_custom_params():
@@ -106,17 +93,14 @@ def example_3_custom_params():
     # Create custom config
     config = TrainingPipeline.create_default_config()
     config['model']['n_latent'] = 128
-    config['model']['dropout'] = 0.1
     config['training']['n_iter'] = 100
     config['training']['loss_function'] = 'hinge_loss'
     config['optimizer']['lr'] = 0.001
+    config['mlflow']['experiment_name'] = 'simple_pipeline_examples'
 
-    # Train with custom config
-    mlflow.set_experiment('simple_pipeline_examples')
     pipeline = TrainingPipeline(config=config)
-    with mlflow.start_run(run_name='example3_custom') as run:
-        recommender = pipeline.train(ui, mlflow_run=run)
-        print(f"\nMLflow run ID: {run.info.run_id}")
+    run_ids = pipeline.run(ui)
+    print(f"\nMLflow run ID: {run_ids[0]}")
 
 
 def example_4_grid_search():
@@ -131,7 +115,7 @@ def example_4_grid_search():
     # Create config
     config = TrainingPipeline.create_default_config()
     config['training']['n_iter'] = 30
-    config['multiprocessing']['num_processes'] = 2
+    config['mlflow']['experiment_name'] = 'example4_grid_search'
 
     # Define parameter grid
     param_grid = {
@@ -170,15 +154,14 @@ def example_5_multiple_datasets():
     # Use same pipeline for all datasets
     config = TrainingPipeline.create_default_config()
     config['training']['n_iter'] = 30
+    config['mlflow']['experiment_name'] = 'example5_multiple_datasets'
     pipeline = TrainingPipeline(config=config)
 
-    # Train on each dataset with MLflow tracking
-    mlflow.set_experiment('example5_multiple_datasets')
+    # Train on each dataset
     for ui in datasets:
         print(f"\nTraining on {ui.name}...")
-        with mlflow.start_run(run_name=ui.name) as run:
-            recommender = pipeline.train(ui, mlflow_run=run)
-            print(f"MLflow run ID: {run.info.run_id}")
+        run_ids = pipeline.run(ui)
+        print(f"MLflow run ID: {run_ids[0]}")
 
 
 if __name__ == '__main__':
@@ -199,7 +182,10 @@ if __name__ == '__main__':
         if example_num in examples:
             examples[example_num]()
         else:
-            print(f"Example {example_num} not found. Available: 1-5")
+            print(
+                f"Example {example_num} not found. "
+                f"Available: 1-5"
+            )
     else:
         # Run example 1 by default
         example_1_basic_training()

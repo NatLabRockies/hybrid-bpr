@@ -6,6 +6,7 @@ import zipfile
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+import urllib3
 import pandas as pd
 import requests
 
@@ -115,8 +116,9 @@ class MovieLensDownloader:
         if extract_path.exists() and not force_download:
             return extract_path
 
-        # Download dataset
+        # Download dataset (SSL verification disabled for grouplens)
         url = f"{self.BASE_URL}{dataset_info['url']}"
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         response = requests.get(url, stream=True, verify=False)
         response.raise_for_status()
 
@@ -358,21 +360,7 @@ def load_movielens(
     cache_dir: Optional[str] = None,
     preprocess: bool = True
 ) -> Dict[str, pd.DataFrame]:
-    """Load MovieLens dataset.
-
-    Args:
-        dataset: Dataset name (ml-100k, ml-1m, ml-10m, ml-20m, ml-25m)
-        cache_dir: Cache directory for downloaded files
-        preprocess: If True and dataset is ml-100k, return preprocessed
-                    genre features. Otherwise return raw data.
-
-    Returns:
-        Dict with dataset-specific keys:
-        - ml-100k (preprocessed): {'ratings', 'features'}
-        - ml-100k (raw): {'ratings', 'movies', 'users'}
-        - ml-1m: {'ratings', 'movies', 'users'}
-        - ml-10m/20m/25m: {'ratings', 'movies', 'tags', ...}
-    """
+    """Load MovieLens dataset; preprocesses ml-100k genre features."""
     downloader = MovieLensDownloader(cache_dir=cache_dir)
 
     # Preprocess ml-100k with genre features if requested

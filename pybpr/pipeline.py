@@ -8,13 +8,12 @@ from functools import partial
 from typing import Dict, List, Any, Optional, Callable
 
 import mlflow
-from mlflow.entities import Run
 from pathos.multiprocessing import ProcessPool, cpu_count
 
 from .recommender import RecommendationSystem
-from .interaction_data import UserItemData
-from .matrix_factorization import HybridMF
-from .losses import bpr_loss, hinge_loss, bpr_loss_v2, warp_loss
+from .interactions import UserItemData
+from .mf import MatrixFactorization
+from .losses import LossFn
 
 # Suppress verbose MLflow/alembic migration logs
 logging.getLogger("alembic").setLevel(logging.WARNING)
@@ -45,12 +44,12 @@ class TrainingPipeline:
         self.cfg_raw = raw_config
         self.cfg = self._flatten_config(raw_config)
 
-        # Map loss function names to actual functions
+        # Auto-discover all loss functions from LossFn
         self.loss_function_map = {
-            'bpr_loss': bpr_loss,
-            'bpr_loss_v2': bpr_loss_v2,
-            'hinge_loss': hinge_loss,
-            'warp_loss': warp_loss,
+            k: getattr(LossFn, k)
+            for k in vars(LossFn)
+            if not k.startswith('_')
+            and callable(getattr(LossFn, k))
         }
 
     @staticmethod
@@ -104,34 +103,24 @@ class TrainingPipeline:
 
         return partial(optimizer_map[optimizer_name], **kwargs)
 
-    def build_model(self, ui: UserItemData) -> HybridMF:
-        """Build a HybridMF model from configuration."""
-        # Build model from flattened config
-        return HybridMF(
+    def build_model(self, ui: UserItemData) -> MatrixFactorization:
+        """Build a MatrixFactorization model from configuration."""
+        return MatrixFactorization(
             n_user_features=ui.n_user_features,
             n_item_features=ui.n_item_features,
             n_latent=self.cfg['model.n_latent'],
-            use_user_bias=self.cfg['model.use_user_bias'],
-            use_global_bias=self.cfg['model.use_global_bias'],
-            dropout=self.cfg['model.dropout'],
-            activation=self.cfg['model.activation'],
-            sparse=self.cfg['model.sparse']
+            sparse=self.cfg['model.sparse'],
+            init_std=self.cfg.get('model.init_std', 0.1),
         )
 
     def run(
         self,
         ui: UserItemData,
         sweep: bool = False,
-        custom_mlflow: Optional[Any] = None
+        custom_mlflow: Optional[Any] = None,
+        num_processes: Optional[int] = None
     ) -> List[str]:
-        """Run training with optional sweep.
-
-        Args:
-            ui: UserItemData object with interaction data
-            sweep: Whether to run parameter sweep
-            custom_mlflow: Optional custom mlflow object (e.g., from hero-mlflow).
-                          If provided, this will be used instead of the default mlflow.
-        """
+        """Run training; sweep=True runs full grid search."""
         # Use custom mlflow if provided, otherwise use default
         mlflow_module = custom_mlflow if custom_mlflow is not None else mlflow
 
@@ -161,6 +150,7 @@ class TrainingPipeline:
                     'mlflow.experiment_name'
                 ),
                 base_run_name=ui.name,
+                num_processes=num_processes,
                 custom_mlflow=custom_mlflow
             )
             print(
@@ -170,7 +160,7 @@ class TrainingPipeline:
         else:
             print("\nTraining single model...")
             with mlflow_module.start_run(run_name=ui.name) as run:
-                self.train(ui, mlflow_run=run, custom_mlflow=custom_mlflow)
+                self.train(ui, custom_mlflow=custom_mlflow)
                 print("\nTraining completed!")
                 print(f"MLflow run ID: {run.info.run_id}")
                 return [run.info.run_id]
@@ -178,19 +168,10 @@ class TrainingPipeline:
     def train(
         self,
         ui: UserItemData,
-        mlflow_run: Run,
         run_name: Optional[str] = None,
         custom_mlflow: Optional[Any] = None
     ) -> RecommendationSystem:
-        """Train a single model using pipeline config.
-
-        Args:
-            ui: UserItemData object with interaction data
-            mlflow_run: MLflow run object
-            run_name: Optional name for the training run
-            custom_mlflow: Optional custom mlflow object (e.g., from hero-mlflow).
-                          If provided, this will be used instead of the default mlflow.
-        """
+        """Train a single model using pipeline config."""
         # Use custom mlflow if provided, otherwise use default
         mlflow_module = custom_mlflow if custom_mlflow is not None else mlflow
 
@@ -201,9 +182,11 @@ class TrainingPipeline:
         # Log all config parameters to MLflow
         mlflow_module.log_params(self.cfg)
 
-        # Get loss function
+        # Get loss function; bind num_items for WARP
         loss_name = self.cfg['training.loss_function']
         loss_fn = self.get_loss_function(loss_name)
+        if loss_name == 'warp_loss':
+            loss_fn = partial(loss_fn, num_items=ui.n_items)
 
         # Build model
         model = self.build_model(ui)
@@ -232,28 +215,25 @@ class TrainingPipeline:
         device = torch.device(
             'cuda' if torch.cuda.is_available() else 'cpu'
         )
-        eval_auc_neg_ratio = self.cfg.get(
-            'training.eval_auc_neg_ratio', 100.0
-        )
         recommender = RecommendationSystem(
-            user_item_data=ui,
+            uidata=ui,
             model=model,
             optimizer=optimizer,
-            loss_function=loss_fn,
+            loss=loss_fn,
             device=device,
-            mlflow_run=mlflow_run,
-            eval_auc_neg_ratio=eval_auc_neg_ratio,
         )
 
         # Train the model
         recommender.fit(
             n_iter=self.cfg['training.n_iter'],
+            n_eval_items=self.cfg.get('training.n_eval_items', 100),
             batch_size=self.cfg['training.batch_size'],
             eval_every=self.cfg['training.eval_every'],
-            eval_user_size=self.cfg['training.eval_user_size'],
+            n_eval_users=self.cfg.get('training.n_eval_users'),
+            top_k=self.cfg.get('training.top_k', 10),
             early_stopping_patience=self.cfg[
                 'training.early_stopping_patience'
-            ]
+            ],
         )
 
         print(f"Finished training: {run_name}", flush=True)
@@ -268,17 +248,7 @@ class TrainingPipeline:
         num_processes: Optional[int] = None,
         custom_mlflow: Optional[Any] = None
     ) -> List[str]:
-        """Run hyperparameter grid search with param combinations.
-
-        Args:
-            ui: UserItemData object with interaction data
-            param_grid: Dictionary of parameters to search over
-            mlflow_experiment_name: Optional MLflow experiment name
-            base_run_name: Base name for runs
-            num_processes: Number of parallel processes
-            custom_mlflow: Optional custom mlflow object (e.g., from hero-mlflow).
-                          If provided, this will be used instead of the default mlflow.
-        """
+        """Run hyperparameter grid search in parallel."""
         # Use custom mlflow if provided, otherwise use default
         mlflow_module = custom_mlflow if custom_mlflow is not None else mlflow
 
@@ -376,15 +346,7 @@ class TrainingPipeline:
         base_run_name: str,
         custom_mlflow: Optional[Any] = None
     ) -> str:
-        """Run a single experiment with given parameters.
-
-        Args:
-            params: Parameter dictionary for this experiment
-            ui: UserItemData object with interaction data
-            base_run_name: Base name for the run
-            custom_mlflow: Optional custom mlflow object (e.g., from hero-mlflow).
-                          If provided, this will be used instead of the default mlflow.
-        """
+        """Run one experiment; returns SUCCESS/FAILED status string."""
         # Use custom mlflow if provided, otherwise use default
         mlflow_module = custom_mlflow if custom_mlflow is not None else mlflow
 
@@ -423,10 +385,10 @@ class TrainingPipeline:
             )
 
             # Start MLflow run for this experiment
-            with mlflow_module.start_run(run_name=run_name) as run:
+            with mlflow_module.start_run(run_name=run_name):
                 # Train model with MLflow run
                 experiment_pipeline.train(
-                    ui=ui, mlflow_run=run, run_name=run_name,
+                    ui=ui, run_name=run_name,
                     custom_mlflow=custom_mlflow
                 )
 
@@ -448,11 +410,8 @@ class TrainingPipeline:
         return {
             'model': {
                 'n_latent': 64,
-                'use_user_bias': True,
-                'use_global_bias': True,
-                'dropout': 0.0,
-                'activation': None,
-                'sparse': False
+                'sparse': False,
+                'init_std': 0.1,
             },
             'optimizer': {
                 'name': 'Adam',
@@ -464,8 +423,8 @@ class TrainingPipeline:
                 'n_iter': 100,
                 'batch_size': 1000,
                 'eval_every': 5,
-                'eval_user_size': None,  # None = all users
-                'eval_auc_neg_ratio': 1.0,
+                'n_eval_users': None,  # None = all users
+                'n_eval_items': 100,
                 'early_stopping_patience': 10,
                 'log_level': 1
             },
@@ -475,7 +434,6 @@ class TrainingPipeline:
                 'neg_option': 'neg-ignore',
                 'rating_threshold': 3.5,
                 'train_ratio_pos': 0.8,
-                'train_ratio_neg': 0.8
             },
             'mlflow': {
                 'experiment_name': 'movielens_pipeline',

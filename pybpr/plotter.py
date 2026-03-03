@@ -14,11 +14,7 @@ class MLflowPlotter:
     """Plot metrics from MLflow experiments."""
 
     def __init__(self, tracking_uri: Union[str, Path] = "mlflow.db"):
-        """Initialize plotter with MLflow tracking URI.
-
-        Args:
-            tracking_uri: Path to MLflow database or tracking URI
-        """
+        """Initialize plotter with MLflow tracking URI."""
         # Convert path to SQLite URI if needed
         if not str(tracking_uri).startswith(("sqlite://", "http")):
             tracking_uri = f"sqlite:///{tracking_uri}"
@@ -44,15 +40,7 @@ class MLflowPlotter:
         experiment_name: Optional[str] = None,
         experiment_id: Optional[str] = None
     ) -> pd.DataFrame:
-        """Get runs for an experiment.
-
-        Args:
-            experiment_name: Name of experiment
-            experiment_id: ID of experiment (overrides name)
-
-        Returns:
-            DataFrame with run information
-        """
+        """Get runs for an experiment as DataFrame."""
         # Get experiment ID from name if needed
         if experiment_id is None and experiment_name is not None:
             exp = self.client.get_experiment_by_name(experiment_name)
@@ -83,16 +71,7 @@ class MLflowPlotter:
     def get_run_metrics_history(
         self, run_id: str, metric_keys: Optional[List[str]] = None
     ) -> Dict[str, pd.DataFrame]:
-        """Get metric history for a run.
-
-        Args:
-            run_id: MLflow run ID
-            metric_keys: List of metric names to fetch
-
-        Returns:
-            Dict mapping metric name to DataFrame with columns:
-            [step, value, timestamp]
-        """
+        """Get metric history for a run as {metric: DataFrame}."""
         # Get all metric keys if not specified
         if metric_keys is None:
             run = self.client.get_run(run_id)
@@ -116,47 +95,40 @@ class MLflowPlotter:
     def plot_runs_comparison(
         self,
         experiment_name: str,
-        metrics: List[str] = ["train_loss", "test_auc"],
+        metrics: List[str] = ["train_bpr_loss", "auc"],
         figsize: tuple = (14, 5),
         std_width: float = 1.0,
         show_std: bool = True
     ) -> Figure:
-        """Plot loss and AUC side by side with optional std bands.
-
-        Args:
-            experiment_name: Name of experiment
-            metrics: List of metrics to plot (expects loss and auc)
-            figsize: Figure size
-            std_width: Std deviation multiplier for bands (1.0, 2.0, etc)
-            show_std: Whether to show std bands on AUC plot
-
-        Returns:
-            Matplotlib Figure
-        """
-        # Get experiment
+        """Plot loss and eval metrics side by side with std bands."""
+        # Get experiment and runs
         exp = self.client.get_experiment_by_name(experiment_name)
         if exp is None:
-            raise ValueError(f"Experiment '{experiment_name}' not found")
-
-        # Get all runs
-        runs = self.client.search_runs(experiment_ids=[exp.experiment_id])
-
+            raise ValueError(
+                f"Experiment '{experiment_name}' not found"
+            )
+        runs = self.client.search_runs(
+            experiment_ids=[exp.experiment_id]
+        )
         if len(runs) == 0:
             raise ValueError(
                 f"No runs found in experiment '{experiment_name}'"
             )
 
-        # Create two subplots side by side
-        fig, axes = plt.subplots(1, 2, figsize=figsize)
+        # Split into loss vs eval metrics
+        loss_metrics = [m for m in metrics if 'loss' in m.lower()]
+        eval_metrics = [
+            m for m in metrics if 'loss' not in m.lower()
+        ]
 
-        # Collect data for std calculation
+        fig, axes = plt.subplots(1, 2, figsize=figsize)
         metric_data = {m: {} for m in metrics}
 
-        # Plot each metric
-        for metric_idx, metric_name in enumerate(metrics):
-            ax = axes[metric_idx]
-
-            # Plot each run
+        # Plot loss on left, eval metrics on right
+        for metric_name, ax in (
+            [(m, axes[0]) for m in loss_metrics]
+            + [(m, axes[1]) for m in eval_metrics]
+        ):
             for run in runs:
                 try:
                     history = self.client.get_metric_history(
@@ -164,54 +136,54 @@ class MLflowPlotter:
                     )
                     if len(history) == 0:
                         continue
-
                     steps = [m.step for m in history]
                     values = [m.value for m in history]
-
                     run_name = (
                         run.info.run_name or run.info.run_id[:8]
                     )
                     ax.plot(
-                        steps, values, label=run_name, marker='o',
-                        markersize=3, alpha=0.7
+                        steps, values,
+                        label=f"{run_name} {metric_name}",
+                        marker='o', markersize=3, alpha=0.7
                     )
-
-                    # Store for std calculation
                     for s, v in zip(steps, values):
                         if s not in metric_data[metric_name]:
                             metric_data[metric_name][s] = []
                         metric_data[metric_name][s].append(v)
-
                 except Exception:
                     continue
 
-            # Add std bands for AUC metrics
-            if (show_std and 'auc' in metric_name.lower() and
-                    metric_data[metric_name]):
-                steps = sorted(metric_data[metric_name].keys())
+            # Std bands on non-loss metrics if requested
+            if (show_std and 'loss' not in metric_name.lower()
+                    and metric_data[metric_name]):
+                steps_s = sorted(metric_data[metric_name].keys())
                 means = [
-                    np.mean(metric_data[metric_name][s]) for s in steps
+                    np.mean(metric_data[metric_name][s])
+                    for s in steps_s
                 ]
                 stds = [
-                    np.std(metric_data[metric_name][s]) for s in steps
+                    np.std(metric_data[metric_name][s])
+                    for s in steps_s
                 ]
-                upper = [
-                    m + std_width * s for m, s in zip(means, stds)
-                ]
-                lower = [
-                    m - std_width * s for m, s in zip(means, stds)
-                ]
-
                 ax.fill_between(
-                    steps, lower, upper, alpha=0.2, color='gray',
+                    steps_s,
+                    [m - std_width * s for m, s in zip(means, stds)],
+                    [m + std_width * s for m, s in zip(means, stds)],
+                    alpha=0.15, color='gray',
                     label=f'±{std_width}σ'
                 )
 
-            ax.set_xlabel("Step/Epoch")
-            ax.set_ylabel(metric_name.replace("_", " ").title())
-            ax.set_title(f"{metric_name.replace('_', ' ').title()}")
-            ax.legend(loc="best")
-            ax.grid(True, alpha=0.3)
+        # Axis labels and formatting
+        axes[0].set_xlabel("Epoch")
+        axes[0].set_ylabel("BPR Loss")
+        axes[0].set_title("Loss")
+        axes[0].legend(loc="best")
+        axes[0].grid(True, alpha=0.3)
+        axes[1].set_xlabel("Epoch")
+        axes[1].set_ylabel("Score")
+        axes[1].set_title("Eval Metrics")
+        axes[1].legend(loc="best")
+        axes[1].grid(True, alpha=0.3)
 
         fig.suptitle(
             f"Experiment: {experiment_name}", fontsize=14, y=1.02
@@ -226,17 +198,7 @@ class MLflowPlotter:
         std_width: float = 2.0,
         show_std: bool = True
     ) -> Figure:
-        """Plot train/test loss and AUC with std bands.
-
-        Args:
-            run_id: MLflow run ID
-            figsize: Figure size
-            std_width: Std multiplier for bands (default 2.0)
-            show_std: Show ± std bands for AUC (default True)
-
-        Returns:
-            Matplotlib Figure
-        """
+        """Plot train loss and eval metrics for a single run."""
         # Get run and all available metrics
         run = self.client.get_run(run_id)
         all_metric_keys = list(run.data.metrics.keys())
@@ -244,25 +206,23 @@ class MLflowPlotter:
         if len(all_metric_keys) == 0:
             raise ValueError(f"No metrics found for run {run_id}")
 
-        # Get metric histories for all metrics
+        # Fetch all metric histories
         histories = self.get_run_metrics_history(
             run_id, all_metric_keys
         )
 
-        # Group metrics by type (loss vs auc, excluding std)
+        # Left: loss metrics; Right: everything else (excl _std keys)
         loss_metrics = [
-            k for k in histories.keys()
-            if 'loss' in k.lower()
+            k for k in histories if 'loss' in k.lower()
         ]
-        auc_metrics = [
-            k for k in histories.keys()
-            if 'auc' in k.lower() and '_std' not in k.lower()
+        eval_metrics = [
+            k for k in histories
+            if 'loss' not in k.lower() and '_std' not in k.lower()
         ]
 
-        # Create two subplots side by side
         fig, axes = plt.subplots(1, 2, figsize=figsize)
 
-        # Plot loss metrics on left subplot
+        # Plot BPR loss metrics on left subplot
         ax_loss = axes[0]
         for metric_name in loss_metrics:
             df = histories[metric_name]
@@ -271,51 +231,43 @@ class MLflowPlotter:
                     df["step"], df["value"], marker='o',
                     markersize=4, linewidth=2, label=metric_name
                 )
-        ax_loss.set_xlabel("Step/Epoch")
-        ax_loss.set_ylabel("Loss")
-        ax_loss.set_title("Loss")
+        ax_loss.set_xlabel("Epoch")
+        ax_loss.set_ylabel("BPR Loss")
+        ax_loss.set_title("BPR Loss")
         ax_loss.legend(loc="best")
         ax_loss.grid(True, alpha=0.3)
 
-        # Plot AUC metrics on right subplot with std bands
-        ax_auc = axes[1]
-
-        # Plot each AUC metric with its std band
-        for idx, metric_name in enumerate(auc_metrics):
+        # Plot eval metrics on right subplot with optional std bands
+        ax_eval = axes[1]
+        for idx, metric_name in enumerate(eval_metrics):
             df = histories[metric_name]
             if len(df) == 0:
                 continue
-
-            # Get corresponding std metric if available
-            std_key = f"{metric_name}_std"
-            df_std = histories.get(std_key)
-
-            # Plot mean line
             color = f'C{idx}'
-            ax_auc.plot(
+            ax_eval.plot(
                 df["step"], df["value"], marker='o',
                 markersize=4, linewidth=2,
                 label=metric_name, color=color
             )
-
-            # Add std bands if available and requested
+            # Add std bands from paired _std metric if present
+            df_std = histories.get(f"{metric_name}_std")
             if show_std and df_std is not None and len(df_std) > 0:
                 steps = df["step"].values
                 means = df["value"].values
                 stds = df_std["value"].values
-                upper = means + std_width * stds
-                lower = means - std_width * stds
-
-                ax_auc.fill_between(
-                    steps, lower, upper, alpha=0.2,
-                    color=color, label=f'{metric_name} ±{std_width}σ'
+                ax_eval.fill_between(
+                    steps,
+                    means - std_width * stds,
+                    means + std_width * stds,
+                    alpha=0.2, color=color,
+                    label=f'{metric_name} ±{std_width}σ'
                 )
 
-        ax_auc.set_xlabel("Step/Epoch")
-        ax_auc.set_ylabel("AUC")
-        ax_auc.set_title("AUC")
-        ax_auc.legend(loc="best")
-        ax_auc.grid(True, alpha=0.3)
+        ax_eval.set_xlabel("Epoch")
+        ax_eval.set_ylabel("Score")
+        ax_eval.set_title("Eval Metrics (AUC / NDCG / P / R)")
+        ax_eval.legend(loc="best")
+        ax_eval.grid(True, alpha=0.3)
 
         run_name = run.info.run_name or run.info.run_id[:8]
         fig.suptitle(f"Run: {run_name}", fontsize=14, y=1.02)
@@ -325,55 +277,46 @@ class MLflowPlotter:
     def plot_best_runs(
         self,
         experiment_name: str,
-        metric: str = "test_auc",
+        metric: str = "auc",
         n_best: int = 5,
-        plot_metrics: List[str] = ["train_loss", "test_auc"],
+        plot_metrics: List[str] = ["train_bpr_loss", "auc"],
         figsize: tuple = (14, 5),
         std_width: float = 1.0,
         show_std: bool = True
     ) -> Figure:
-        """Plot top N runs with loss and AUC side by side.
-
-        Args:
-            experiment_name: Name of experiment
-            metric: Metric to rank by (higher is better)
-            n_best: Number of top runs to plot
-            plot_metrics: List of metrics to plot
-            figsize: Figure size
-            std_width: Std deviation multiplier for bands
-            show_std: Whether to show std bands on AUC plot
-
-        Returns:
-            Matplotlib Figure
-        """
-        # Get experiment
+        """Plot top N runs: BPR loss left, eval metrics right."""
+        # Get experiment and top-N runs
         exp = self.client.get_experiment_by_name(experiment_name)
         if exp is None:
-            raise ValueError(f"Experiment '{experiment_name}' not found")
-
-        # Search runs sorted by metric
+            raise ValueError(
+                f"Experiment '{experiment_name}' not found"
+            )
         runs = self.client.search_runs(
             experiment_ids=[exp.experiment_id],
             order_by=[f"metrics.{metric} DESC"],
             max_results=n_best
         )
-
         if len(runs) == 0:
             raise ValueError(
                 f"No runs found in experiment '{experiment_name}'"
             )
 
-        # Create two subplots side by side
-        fig, axes = plt.subplots(1, 2, figsize=figsize)
+        # Split into loss vs eval metrics
+        loss_metrics = [
+            m for m in plot_metrics if 'loss' in m.lower()
+        ]
+        eval_metrics = [
+            m for m in plot_metrics if 'loss' not in m.lower()
+        ]
 
-        # Collect data for std calculation
+        fig, axes = plt.subplots(1, 2, figsize=figsize)
         metric_data = {m: {} for m in plot_metrics}
 
-        # Plot each metric
-        for metric_idx, metric_name in enumerate(plot_metrics):
-            ax = axes[metric_idx]
-
-            # Plot each run
+        # Plot loss on left, eval metrics on right
+        for metric_name, ax in (
+            [(m, axes[0]) for m in loss_metrics]
+            + [(m, axes[1]) for m in eval_metrics]
+        ):
             for rank, run in enumerate(runs, 1):
                 try:
                     history = self.client.get_metric_history(
@@ -381,10 +324,8 @@ class MLflowPlotter:
                     )
                     if len(history) == 0:
                         continue
-
                     steps = [m.step for m in history]
                     values = [m.value for m in history]
-
                     run_name = (
                         run.info.run_name or run.info.run_id[:8]
                     )
@@ -393,53 +334,52 @@ class MLflowPlotter:
                         f"#{rank} {run_name} "
                         f"({metric}={final_val:.4f})"
                     )
-
                     ax.plot(
                         steps, values, label=label, marker='o',
                         markersize=3, alpha=0.7, linewidth=2
                     )
-
-                    # Store for std calculation
                     for s, v in zip(steps, values):
                         if s not in metric_data[metric_name]:
                             metric_data[metric_name][s] = []
                         metric_data[metric_name][s].append(v)
-
                 except Exception:
                     continue
 
-            # Add std bands for AUC metrics
-            if (show_std and 'auc' in metric_name.lower() and
-                    metric_data[metric_name]):
-                steps = sorted(metric_data[metric_name].keys())
+            # Std bands on eval metrics only
+            if (show_std and 'loss' not in metric_name.lower()
+                    and metric_data[metric_name]):
+                steps_s = sorted(metric_data[metric_name].keys())
                 means = [
-                    np.mean(metric_data[metric_name][s]) for s in steps
+                    np.mean(metric_data[metric_name][s])
+                    for s in steps_s
                 ]
                 stds = [
-                    np.std(metric_data[metric_name][s]) for s in steps
+                    np.std(metric_data[metric_name][s])
+                    for s in steps_s
                 ]
-                upper = [
-                    m + std_width * s for m, s in zip(means, stds)
-                ]
-                lower = [
-                    m - std_width * s for m, s in zip(means, stds)
-                ]
-
                 ax.fill_between(
-                    steps, lower, upper, alpha=0.2, color='gray',
+                    steps_s,
+                    [m - std_width * s for m, s in zip(means, stds)],
+                    [m + std_width * s for m, s in zip(means, stds)],
+                    alpha=0.15, color='gray',
                     label=f'±{std_width}σ'
                 )
 
-            ax.set_xlabel("Step/Epoch")
-            ax.set_ylabel(metric_name.replace("_", " ").title())
-            ax.set_title(f"{metric_name.replace('_', ' ').title()}")
-            ax.legend(loc="best")
-            ax.grid(True, alpha=0.3)
+        # Axis formatting
+        axes[0].set_xlabel("Epoch")
+        axes[0].set_ylabel("BPR Loss")
+        axes[0].set_title("BPR Loss")
+        axes[0].legend(loc="best")
+        axes[0].grid(True, alpha=0.3)
+        axes[1].set_xlabel("Epoch")
+        axes[1].set_ylabel("Score")
+        axes[1].set_title("Eval Metrics")
+        axes[1].legend(loc="best")
+        axes[1].grid(True, alpha=0.3)
 
         fig.suptitle(
             f"Top {n_best} Runs by {metric} - {experiment_name}",
-            fontsize=14,
-            y=1.02
+            fontsize=14, y=1.02
         )
         fig.tight_layout()
         return fig
@@ -447,19 +387,10 @@ class MLflowPlotter:
     def summary_table(
         self,
         experiment_name: str,
-        metrics: List[str] = ["test_auc", "train_loss"],
+        metrics: List[str] = ["auc", "train_bpr_loss"],
         params: Optional[List[str]] = None
     ) -> pd.DataFrame:
-        """Create summary table of runs.
-
-        Args:
-            experiment_name: Name of experiment
-            metrics: Metrics to include (final values)
-            params: Parameters to include
-
-        Returns:
-            DataFrame with run summaries
-        """
+        """Create summary DataFrame of runs sorted by first metric."""
         # Get runs
         runs_df = self.get_runs(experiment_name=experiment_name)
 

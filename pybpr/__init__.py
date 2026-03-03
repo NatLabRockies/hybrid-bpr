@@ -1,24 +1,18 @@
 """Public API exports for pybpr package."""
 
 # Core data structures
-from .interaction_data import UserItemData
+from .interactions import UserItemData
 
 # Loss functions
-from .losses import (
-    PairwiseLossFn, bpr_loss, bpr_loss_v2, hinge_loss, warp_loss
-)
+from .losses import LossFn
 
 # Models
-from .matrix_factorization import HybridMF
+from .mf import MatrixFactorization
 from .recommender import RecommendationSystem
 
-# Utilities
-from .utils import (
-    get_user_interactions, compute_auc_scores,
-    sample_pos_neg_pairs, split_sparse_coo_matrix,
-    get_sparse_matrix_stats, print_sparse_matrix_stats
-)
-from .movielens_loader import load_movielens, MovieLensDownloader
+# Data loading
+from .movielens import load_movielens, MovieLensDownloader
+from .zazzle import load_zazzle as load_zazzle
 
 # Pipeline
 from .pipeline import TrainingPipeline
