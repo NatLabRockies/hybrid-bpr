@@ -15,6 +15,17 @@ from .interactions import UserItemData
 from .mf import MatrixFactorization
 from .losses import LossFn
 
+# Abbreviations for sweep param keys in run names
+_KEY_ABBREVS: Dict[str, str] = {
+    'n_latent': 'nl',
+    'item_feature': 'feat',
+    'loss_function': 'loss',
+    'weight_decay': 'wd',
+    'batch_size': 'bs',
+    'n_iter': 'ni',
+    'learning_rate': 'lr',
+}
+
 # Suppress verbose MLflow/alembic migration logs
 logging.getLogger("alembic").setLevel(logging.WARNING)
 logging.getLogger("mlflow").setLevel(logging.WARNING)
@@ -366,16 +377,18 @@ class TrainingPipeline:
                         experiment_config[section] = {}
                     experiment_config[section][key] = param_value
 
-                    # Add to run name
-                    if key == 'loss_function':
-                        if callable(param_value):
-                            run_name_parts.append(
-                                param_value.__name__
-                            )
-                        else:
-                            run_name_parts.append(str(param_value))
+                    # Add abbreviated key=value to run name
+                    abbrev = _KEY_ABBREVS.get(key, key)
+                    if key == 'loss_function' and callable(
+                        param_value
+                    ):
+                        run_name_parts.append(
+                            f"{abbrev}{param_value.__name__}"
+                        )
                     else:
-                        run_name_parts.append(f"{key}{param_value}")
+                        run_name_parts.append(
+                            f"{abbrev}{param_value}"
+                        )
 
             run_name = '_'.join(str(p) for p in run_name_parts)
 

@@ -6,9 +6,12 @@ import zipfile
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+import numpy as np
 import urllib3
 import pandas as pd
 import requests
+
+from .interactions import UserItemData
 
 
 class MovieLensDownloader:
@@ -370,6 +373,143 @@ def load_movielens(
 
     # Return raw data for all other cases
     return downloader.load_dataset_with_tags(dataset)
+
+
+# Datasets with item features available for training
+FEATURE_DATASETS = ['ml-100k', 'ml-10m', 'ml-20m', 'ml-25m']
+
+
+def _preprocess_ml10m(raw: dict) -> dict:
+    """Normalize ml-10m text tags → integer feature IDs."""
+    # Rename rating columns to match standard format
+    rdf = raw['ratings'].copy()
+    rdf.columns = ['UserID', 'MovieID', 'Rating', 'Timestamp']
+
+    # Factorize free-text tags to unique integer IDs per movie
+    tdf = raw['tags'][['movieId', 'tag']].drop_duplicates().copy()
+    tdf['TagID'] = pd.factorize(tdf['tag'])[0]
+    tdf = tdf.rename(columns={'movieId': 'MovieID'})[
+        ['MovieID', 'TagID']
+    ]
+
+    # Keep only movies with tag features
+    rdf = rdf[rdf.MovieID.isin(tdf.MovieID.unique())].copy()
+    return {'ratings': rdf, 'features': tdf}
+
+
+def _preprocess_mlgenome(
+    raw: dict,
+    relevance_threshold: float = 0.5
+) -> dict:
+    """Normalize ml-20m/25m genome scores → feature IDs + weights."""
+    # Rename rating columns to match standard format
+    rdf = raw['ratings'].copy()
+    rdf.columns = ['UserID', 'MovieID', 'Rating', 'Timestamp']
+
+    # Filter genome scores by relevance and rename columns
+    gdf = raw['genome_scores'].copy()
+    gdf = gdf[gdf['relevance'] > relevance_threshold]
+    tdf = gdf.rename(
+        columns={'movieId': 'MovieID', 'tagId': 'TagID'}
+    )[['MovieID', 'TagID', 'relevance']]
+
+    # Keep only movies with genome features
+    rdf = rdf[rdf.MovieID.isin(tdf.MovieID.unique())].copy()
+    return {'ratings': rdf, 'features': tdf}
+
+
+def load_movielens_ui(
+    dataset: str,
+    rating_threshold: float,
+    item_feature: str,
+    use_negatives: bool = False,
+    name: Optional[str] = None
+) -> UserItemData:
+    """Load MovieLens dataset and return a UserItemData object."""
+    # Load and normalize dataset
+    if dataset == 'ml-100k':
+        data = load_movielens(dataset='ml-100k', preprocess=True)
+    elif dataset == 'ml-10m':
+        raw = load_movielens(dataset='ml-10m', preprocess=False)
+        data = _preprocess_ml10m(raw)
+    else:
+        raw = load_movielens(dataset=dataset, preprocess=False)
+        data = _preprocess_mlgenome(raw)
+
+    rdf = data['ratings']
+    tdf = data['features']
+
+    # Use relevance as feature weight if present, else uniform
+    weights = (
+        tdf['relevance'].values
+        if 'relevance' in tdf.columns
+        else None
+    )
+
+    # Initialize UserItemData (append _neg suffix when negatives used)
+    _name = name or dataset
+    ui = UserItemData(
+        name=f'{_name}_neg' if use_negatives else _name
+    )
+
+    # Add positive interactions (ratings at or above threshold)
+    pos_mask = rdf.Rating >= rating_threshold
+    ui.add_positive_interactions(
+        user_ids=rdf.UserID[pos_mask].values,
+        item_ids=rdf.MovieID[pos_mask].values
+    )
+
+    # Optionally add negative interactions (ratings below threshold)
+    if use_negatives:
+        neg_mask = rdf.Rating < rating_threshold
+        ui.add_negative_interactions(
+            user_ids=rdf.UserID[neg_mask].values,
+            item_ids=rdf.MovieID[neg_mask].values
+        )
+
+    # Add user features (identity mapping)
+    unique_users = rdf.UserID.unique()
+    ui.add_user_features(
+        user_ids=unique_users,
+        feature_ids=unique_users
+    )
+
+    # Add item features based on configured option
+    unique_movies = tdf.MovieID.unique()
+    if item_feature == 'metadata':
+        # Tag/genre-based semantic features
+        ui.add_item_features(
+            item_ids=tdf.MovieID.values,
+            feature_ids=tdf.TagID.values,
+            feature_weights=weights
+        )
+    elif item_feature == 'indicator':
+        # One-hot identity features per movie
+        ui.add_item_features(
+            item_ids=unique_movies,
+            feature_ids=unique_movies
+        )
+    elif item_feature == 'both':
+        # Combine metadata + identity; offset indicator IDs
+        offset = int(tdf.TagID.max()) + 1
+        ui.add_item_features(
+            item_ids=np.concatenate(
+                [tdf.MovieID.values, unique_movies]
+            ),
+            feature_ids=np.concatenate([
+                tdf.TagID.values,
+                offset + unique_movies
+            ]),
+            feature_weights=(
+                np.concatenate([weights, np.ones(len(unique_movies))])
+                if weights is not None else None
+            )
+        )
+    else:
+        raise ValueError(f"Unknown item_feature: {item_feature}")
+
+    print(ui)
+    return ui
 
 
 def main() -> None:

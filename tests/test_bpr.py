@@ -6,8 +6,8 @@ Email: rimple.sandhu@outlook.com
 """
 import os
 import numpy as np
-from pybpr import UserItemInteractions, BPR, bpr_fit
-from pybpr.utils import load_movielens_data
+from hybridbpr import UserItemInteractions, BPR, bpr_fit
+from hybridbpr.utils import load_movielens_data
 
 print(os.path.dirname(os.path.abspath(__file__)))
 

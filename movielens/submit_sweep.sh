@@ -2,7 +2,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --exclusive
-#SBATCH --time=23:00:00
+#SBATCH --time=6:00:00
 #SBATCH --account=smartipc
 #SBATCH --qos=high
 #SBATCH --job-name=pybpr_sweep
@@ -31,7 +31,7 @@ EXTRA_ARGS="--sweep"
 [[ $USE_HERO -eq 1 ]] && EXTRA_ARGS="$EXTRA_ARGS --hero"
 
 # Divide available CPUs evenly across datasets; run all in parallel
-DATASETS=("ml-100k" "ml-10m" "ml-20m")
+DATASETS=("ml-100k" "ml-10m")
 N_DATASETS=${#DATASETS[@]}
 TOTAL_CPUS=${SLURM_CPUS_ON_NODE:-$(nproc)}
 CPUS_PER_DATASET=$(( TOTAL_CPUS / N_DATASETS ))

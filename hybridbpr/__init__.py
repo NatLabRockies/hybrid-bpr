@@ -1,4 +1,4 @@
-"""Public API exports for pybpr package."""
+"""Public API exports for hybrid-bpr package."""
 
 # Core data structures
 from .interactions import UserItemData
@@ -11,7 +11,10 @@ from .mf import MatrixFactorization
 from .recommender import RecommendationSystem
 
 # Data loading
-from .movielens import load_movielens, MovieLensDownloader
+from .movielens import (
+    load_movielens, MovieLensDownloader,
+    load_movielens_ui, FEATURE_DATASETS
+)
 from .zazzle import load_zazzle as load_zazzle
 
 # Pipeline
@@ -19,3 +22,6 @@ from .pipeline import TrainingPipeline
 
 # Visualization
 from .plotter import MLflowPlotter
+
+# Utilities
+from .utils import init_hero_mlflow

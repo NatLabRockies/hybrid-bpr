@@ -2,17 +2,19 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --exclusive
-#SBATCH --time=1:00:00
+#SBATCH --time=6:00:00
 #SBATCH --account=smartipc
 #SBATCH --qos=high
 #SBATCH --job-name=pybpr_zazzle_sweep
 #SBATCH --output=logs/pybpr_zazzle_sweep-%j.out
 
-# Submit from zazzle/:
+# Usage (with or without SLURM):
 #   mkdir -p logs
-#   sbatch submit_sweep.sh
+#   sbatch submit_sweep.sh   # via SLURM
+#   bash   submit_sweep.sh   # run locally
 # SLURM_SUBMIT_DIR is zazzle/; project root is one level up
-cd "$(dirname "$SLURM_SUBMIT_DIR")" || exit 1
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")" && pwd)}"
+cd "$(dirname "$SUBMIT_DIR")" || exit 1
 
 # Divide CPUs evenly across event types; run in parallel
 EVENT_TYPES=("clicks" "orders")
@@ -33,7 +35,8 @@ for EVENT in "${EVENT_TYPES[@]}"; do
     uv run python zazzle/run_zazzle.py \
         --event-type "$EVENT" \
         --n-jobs "$CPUS_PER_EVENT" \
-        --sweep &
+        --sweep \
+        --hero &
 done
 
 # Wait for all background jobs to finish

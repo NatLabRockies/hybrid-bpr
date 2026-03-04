@@ -8,7 +8,7 @@ Reuse same UserItemData with different training configs.
 
 import numpy as np
 
-from pybpr import UserItemData, TrainingPipeline
+from hybridbpr import UserItemData, TrainingPipeline
 
 
 def create_synthetic_data():

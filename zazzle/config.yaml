@@ -11,7 +11,7 @@ model:
 optimizer:
   name: 'Adam'                     # 'Adam', 'SGD', 'AdamW', 'RMSprop'
   lr: 0.001                        # Learning rate
-  weight_decay: 0.0001             # L2 regularization
+  weight_decay: 0.0000             # L2 regularization
 
 # Training
 training:
@@ -39,3 +39,4 @@ mlflow:
 sweep:
   model.n_latent: [32, 64, 128]
   data.item_feature: ['metadata', 'indicator', 'both']
+  optimizer.lr: [0.01, 0.001, 0.0001]

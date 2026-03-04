@@ -10,13 +10,13 @@ model:
 # Optimizer
 optimizer:
   name: 'Adam'                     # 'Adam', 'SGD', 'AdamW', 'RMSprop'
-  lr: 0.001                        # Learning rate
-  weight_decay: 0.0001               # L2 regularization
+  lr: 0.01                        # Learning rate
+  weight_decay: 0.0000               # L2 regularization
 
 # Training
 training:
   loss_function: 'bpr_loss'       # Loss function
-  n_iter: 3000                     # Training iterations
+  n_iter: 5000                     # Training iterations
   batch_size: 100                # Batch size
   eval_every: 10                   # Evaluation frequency
   n_eval_users: 10000              # Users to evaluate (null = all)
@@ -32,10 +32,11 @@ data:
 
 # MLflow
 mlflow:
-  experiment_name: 'movielens-runs'  # Experiment name
+  experiment_name: 'mlruns'  # Experiment name
   tracking_uri: 'sqlite:///mlflow.db'    # Tracking URI
 
 # Comprehensive parameter sweep (all relevant parameters)
 sweep:
   model.n_latent: [32, 64, 128]
   data.item_feature: ['metadata', 'indicator', 'both']
+  optimizer.lr: [0.01, 0.001, 0.0001]

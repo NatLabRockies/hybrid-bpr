@@ -1,12 +1,12 @@
 [project]
-name = "pybpr"
+name = "hybridbpr"
 version = "0.0.1"
 description = "Suite of Bayesian algorithms"
-readme = "README.rst"
+readme = "README.md"
 requires-python = ">=3.13"
 license = {text = "BSD 3-Clause License"}
 authors = [
-    {name = "Rimple Sandhu", email = "rimple.sandhu@nrel.gov"}
+    {name = "Rimple Sandhu", email = "rimple.sandhu@nlr.gov"}
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

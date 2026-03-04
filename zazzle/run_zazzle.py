@@ -10,8 +10,8 @@ import os
 
 import numpy as np
 
-from pybpr import TrainingPipeline, UserItemData
-from pybpr.zazzle import EVENT_TYPES, load_zazzle
+from hybridbpr import TrainingPipeline, UserItemData, init_hero_mlflow
+from hybridbpr.zazzle import EVENT_TYPES, load_zazzle
 
 
 def build_user_item_data(
@@ -121,11 +121,27 @@ def main() -> None:
         default=None,
         help='Parallel workers for sweep (default: all CPUs)'
     )
+    parser.add_argument(
+        '--hero',
+        action='store_true',
+        help='Log to Hero ML Model Registry instead of local MLflow'
+    )
     args = parser.parse_args()
 
     # Initialize training pipeline from config
     print(f"Loading config: {args.config}")
     pipeline = TrainingPipeline(config_path=args.config)
+
+    # Append event type to experiment for per-event separation
+    base_exp = pipeline.cfg.get('mlflow.experiment_name', 'zazzle')
+    pipeline.cfg['mlflow.experiment_name'] = (
+        f'{base_exp}-{args.event_type}'
+    )
+
+    # Optionally initialize Hero MLflow backend
+    custom_mlflow = None
+    if args.hero:
+        custom_mlflow, _ = init_hero_mlflow(pipeline)
 
     # item_feature comes from config
     item_feature = pipeline.cfg.get('data.item_feature', 'indicator')
@@ -143,14 +159,18 @@ def main() -> None:
     )
 
     # Run training or sweep (MLflow handled by pipeline)
+    mlflow_kwargs = (
+        {"custom_mlflow": custom_mlflow} if custom_mlflow else {}
+    )
     run_ids = pipeline.run(
-        ui, sweep=args.sweep, num_processes=args.n_jobs
+        ui, sweep=args.sweep, num_processes=args.n_jobs,
+        **mlflow_kwargs
     )
 
-    # Plot single run and save figure
-    if not args.sweep and run_ids:
+    # Plot single run and save figure (local MLflow only)
+    if not args.sweep and run_ids and not args.hero:
         import matplotlib.pyplot as plt
-        from pybpr import MLflowPlotter
+        from hybridbpr import MLflowPlotter
 
         os.makedirs('figs', exist_ok=True)
         plotter = MLflowPlotter(
