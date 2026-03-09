@@ -58,3 +58,8 @@ ENV/
 data/
 tags*
 cache
+
+# Claude
+CLAUDE.md
+mlflow.db
+mlruns/
