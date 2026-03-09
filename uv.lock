@@ -707,7 +707,6 @@ dependencies = [
     { name = "scikit-learn" },
     { name = "scipy" },
     { name = "torch" },
-    { name = "tqdm" },
 ]
 
 [package.dev-dependencies]
@@ -729,7 +728,6 @@ requires-dist = [
     { name = "scikit-learn" },
     { name = "scipy" },
     { name = "torch" },
-    { name = "tqdm" },
 ]
 
 [package.metadata.requires-dev]

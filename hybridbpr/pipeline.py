@@ -245,6 +245,7 @@ class TrainingPipeline:
             early_stopping_patience=self.cfg[
                 'training.early_stopping_patience'
             ],
+            custom_mlflow=custom_mlflow,
         )
 
         print(f"Finished training: {run_name}", flush=True)
@@ -360,6 +361,15 @@ class TrainingPipeline:
         """Run one experiment; returns SUCCESS/FAILED status string."""
         # Use custom mlflow if provided, otherwise use default
         mlflow_module = custom_mlflow if custom_mlflow is not None else mlflow
+
+        # Set tracking URI in subprocess (multiprocessing resets global state)
+        if custom_mlflow is None:
+            mlflow_module.set_tracking_uri(
+                self.cfg['mlflow.tracking_uri']
+            )
+            mlflow_module.set_experiment(
+                self.cfg['mlflow.experiment_name']
+            )
 
         run_name = "unknown"
         try:

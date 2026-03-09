@@ -32,11 +32,11 @@ data:
 
 # MLflow
 mlflow:
-  experiment_name: 'zazzle-runs'        # Experiment name
+  experiment_name: 'zazzle-runs2'        # Experiment name
   tracking_uri: 'sqlite:///mlflow.db'   # Tracking URI
 
 # Parameter sweep
 sweep:
-  model.n_latent: [32, 64, 128]
+  model.n_latent: [64, 128, 256]
   data.item_feature: ['metadata', 'indicator', 'both']
-  optimizer.lr: [0.01, 0.001, 0.0001]
+

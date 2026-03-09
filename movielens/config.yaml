@@ -10,19 +10,19 @@ model:
 # Optimizer
 optimizer:
   name: 'Adam'                     # 'Adam', 'SGD', 'AdamW', 'RMSprop'
-  lr: 0.01                        # Learning rate
+  lr: 0.001                        # Learning rate
   weight_decay: 0.0000               # L2 regularization
 
 # Training
 training:
   loss_function: 'bpr_loss'       # Loss function
   n_iter: 5000                     # Training iterations
-  batch_size: 100                # Batch size
-  eval_every: 10                   # Evaluation frequency
+  batch_size: 512                # Batch size
+  eval_every: 50                   # Evaluation frequency
   n_eval_users: 10000              # Users to evaluate (null = all)
   n_eval_items: null               # Neg candidates per eval user (null=all)
   top_k: 20                       # Rank cutoff for NDCG/P/R metrics
-  early_stopping_patience: 1000   # Early stopping patience
+  early_stopping_patience: 500    # Early stopping patience (epochs)
   log_level: 1                    # Logging verbosity
 
 # Data processing
@@ -32,11 +32,10 @@ data:
 
 # MLflow
 mlflow:
-  experiment_name: 'mlruns'  # Experiment name
+  experiment_name: 'mlruns3'  # Experiment name
   tracking_uri: 'sqlite:///mlflow.db'    # Tracking URI
 
 # Comprehensive parameter sweep (all relevant parameters)
 sweep:
   model.n_latent: [32, 64, 128]
   data.item_feature: ['metadata', 'indicator', 'both']
-  optimizer.lr: [0.01, 0.001, 0.0001]

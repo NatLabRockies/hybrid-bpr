@@ -1,7 +1,6 @@
 """Streamlined recommendation system with hybrid MF."""
 
-import sys
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import mlflow
 import mlflow.pytorch
@@ -11,7 +10,6 @@ import torch.optim
 from scipy.sparse import csr_matrix
 from sklearn.metrics import roc_auc_score
 from torch.utils.data import DataLoader, TensorDataset
-from tqdm import tqdm
 
 from .interactions import UserItemData
 from .mf import MatrixFactorization
@@ -359,8 +357,12 @@ class RecommendationSystem:
         n_eval_users: Optional[int] = None,
         early_stopping_patience: int = 10,
         top_k: int = 10,
+        custom_mlflow: Optional[Any] = None,
     ) -> None:
         """Train the model using BPR optimization."""
+        # Use custom mlflow if provided (e.g. Hero backend)
+        mlflow_mod = custom_mlflow if custom_mlflow is not None else mlflow
+
         from pathos.helpers import mp
         num_workers = (
             0 if mp.current_process().name != 'MainProcess' else 2
@@ -377,7 +379,7 @@ class RecommendationSystem:
             f' | eval_every={eval_every}'
         )
 
-        mlflow.log_params({
+        mlflow_mod.log_params({
             'n_iter': n_iter,
             'n_eval_items': n_eval_items,
             'batch_size': batch_size,
@@ -387,22 +389,25 @@ class RecommendationSystem:
         })
 
         best_ndcg, best_epoch, patience_counter = 0.0, 0, 0
+        w = len(str(n_iter))
 
-        epoch_looper = tqdm(
-            range(1, n_iter + 1),
-            total=n_iter,
-            file=sys.stdout,
-            desc='HybBPR',
-            ncols=70,
-            unit='ep',
-        )
-
-        for epoch in epoch_looper:
+        for epoch in range(1, n_iter + 1):
             avg_loss = sum(
                 self._train(batch[0].numpy()) for batch in dataloader
             ) / len(dataloader)
-            epoch_looper.set_postfix({'loss': f'{avg_loss:.4f}'})
-            mlflow.log_metric('train_bpr_loss', avg_loss, step=epoch)
+            mlflow_mod.log_metric(
+                'train_bpr_loss', avg_loss, step=epoch
+            )
+
+            # Inline progress bar
+            pct = epoch / n_iter
+            filled = int(20 * pct)
+            bar = '#' * filled + '-' * (20 - filled)
+            print(
+                f'\rEpoch {epoch:{w}}/{n_iter}'
+                f' [{bar}] loss={avg_loss:.4f}',
+                end='', flush=True,
+            )
 
             if epoch % eval_every == 0:
                 metrics = self.evaluate(
@@ -410,7 +415,7 @@ class RecommendationSystem:
                     top_k=top_k,
                     max_users=n_eval_users,
                 )
-                mlflow.log_metrics(metrics, step=epoch)
+                mlflow_mod.log_metrics(metrics, step=epoch)
 
                 current_ndcg = metrics.get(f'ndcg_{top_k}', 0)
                 if current_ndcg > best_ndcg:
@@ -418,14 +423,11 @@ class RecommendationSystem:
                         current_ndcg, epoch, 0
                     )
                 else:
-                    patience_counter += 1
+                    patience_counter += eval_every
 
-                if patience_counter >= early_stopping_patience:
-                    print(f'Early stopping at epoch {epoch}')
-                    break
-
-                epoch_looper.write(
-                    f'E{epoch}:'
+                # Print eval metrics on new line
+                print(
+                    f'\nE{epoch}:'
                     f' AUC {metrics.get("auc", 0):.3f}'
                     f' | NDCG@{top_k}'
                     f' {metrics.get(f"ndcg_{top_k}", 0):.3f}'
@@ -436,17 +438,32 @@ class RecommendationSystem:
                     f' | Loss {metrics.get("bpr_loss", 0):.3f}'
                 )
 
-        if best_epoch > 0:
-            self.save_model(name=f'best_model_epoch_{best_epoch}')
+                if patience_counter >= early_stopping_patience:
+                    print(f'Early stopping at epoch {epoch}')
+                    break
 
-    def save_model(self, name: str = 'model', tqdm_obj=None) -> None:
+        print()
+
+        if best_epoch > 0:
+            self.save_model(
+                name=f'best_model_epoch_{best_epoch}',
+                custom_mlflow=custom_mlflow,
+            )
+
+    def save_model(
+        self,
+        name: str = 'model',
+        custom_mlflow: Optional[Any] = None,
+    ) -> None:
         """Save model to MLflow."""
+        mlflow_mod = (
+            custom_mlflow if custom_mlflow is not None else mlflow
+        )
         try:
-            mlflow.pytorch.log_model(
+            mlflow_mod.pytorch.log_model(
                 pytorch_model=self.model, name=name
             )
-            msg = f'Logged model to MLflow: {name}'
-            (tqdm_obj.write if tqdm_obj else print)(msg)
+            print(f'Logged model to MLflow: {name}')
         except Exception as e:
             print(f'ERROR: Failed to save model: {e}')
             raise

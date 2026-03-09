@@ -1,0 +1,60 @@
+# output direcotries
+output/
+notebooks/output/
+examples/output/
+examples/.hscfg
+notebooks/.hscfg
+ssrs/output
+ssrs/older/
+ssrs/__pycache__/
+
+# Compiled
+__pycache__/
+.DS_Store
+*.pyc
+*.pyo
+.pytest_cache
+
+# docs
+docs/_build/
+docs/_template/
+docs/_static/
+
+
+# Distribution / packaging
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+.installed.cfg
+*.egg-info
+_build/
+.pypirc
+
+# Sphinx documentation
+docs/_build/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# dotenv
+.env
+
+# virtualenv
+.venv
+venv/
+ENV/
+
+# IDE settings
+.vscode/
+
+# logs
+.nvimlog
+data/
+tags*
+cache

@@ -2,11 +2,12 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --exclusive
-#SBATCH --time=6:00:00
+#SBATCH --time=12:00:00
 #SBATCH --account=smartipc
 #SBATCH --qos=high
 #SBATCH --job-name=pybpr_zazzle_sweep
 #SBATCH --output=logs/pybpr_zazzle_sweep-%j.out
+##SBATCH --partition=debug
 
 # Usage (with or without SLURM):
 #   mkdir -p logs
