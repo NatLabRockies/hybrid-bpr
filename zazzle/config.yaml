@@ -11,7 +11,7 @@ model:
 optimizer:
   name: 'Adam'                     # 'Adam', 'SGD', 'AdamW', 'RMSprop'
   lr: 0.001                        # Learning rate
-  weight_decay: 0.0000             # L2 regularization
+  weight_decay: 0.0             # L2 regularization
 
 # Training
 training:
@@ -32,7 +32,7 @@ data:
 
 # MLflow
 mlflow:
-  experiment_name: 'zazzle-runs2'        # Experiment name
+  experiment_name: 'zazzle-runs'        # Experiment name
   tracking_uri: 'sqlite:///mlflow.db'   # Tracking URI
 
 # Parameter sweep
