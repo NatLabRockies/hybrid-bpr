@@ -274,12 +274,16 @@ Open http://localhost:5000 to compare runs.
 
 ## Citation
 
+Sandhu, R., & Tripp, C. (2026). *hybrid-bpr: Feature-Rich Bayesian
+Personalized Ranking with Implicit Negatives*. National Laboratory of
+the Rockies. https://github.com/rimplesandhu/hybrid-bpr
+
 ```bibtex
 @software{hybrid_bpr,
     title={hybrid-bpr: Feature-Rich BPR with Implicit Negatives},
     author={Rimple Sandhu and Charles Tripp},
-    year={2024},
-    url={https://github.com/rimplesandhu/pybpr}
+    year={2026},
+    url={https://github.com/rimplesandhu/hybrid-bpr}
 }
 ```
 
@@ -289,11 +293,12 @@ Original BPR paper:
 > (2009). BPR: Bayesian Personalized Ranking from Implicit Feedback.
 > *UAI 2009*.
 
+NLR Software record number: SWR-26-039
+
 ---
 
-## Contact
+## Developers
 
 - **Rimple Sandhu** — rimple.sandhu@nlr.gov
-- **Charles Tripp** — charles.tripp@nlr.gov
+- **Charles Tripp** — charles.tripp@zazzle.com
 
-National Laboratory of the Rockies (NLR)
