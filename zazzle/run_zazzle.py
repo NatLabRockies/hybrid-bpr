@@ -17,7 +17,8 @@ from hybridbpr.zazzle import EVENT_TYPES, load_zazzle
 def build_user_item_data(
     data: dict,
     item_feature: str,
-    name: str
+    name: str,
+    use_negatives: bool = True,
 ) -> UserItemData:
     """Build UserItemData from Zazzle data dict."""
     pos = data['positives']
@@ -33,15 +34,16 @@ def build_user_item_data(
     # Initialize UserItemData
     ui = UserItemData(name=name)
 
-    # Add positive interactions (clicked) and negatives (viewed only)
+    # Add positive interactions; optionally add explicit negatives
     ui.add_positive_interactions(
         user_ids=pos['UserID'].values,
         item_ids=pos['ProductID'].values
     )
-    ui.add_negative_interactions(
-        user_ids=neg['UserID'].values,
-        item_ids=neg['ProductID'].values
-    )
+    if use_negatives:
+        ui.add_negative_interactions(
+            user_ids=neg['UserID'].values,
+            item_ids=neg['ProductID'].values
+        )
 
     # Add user features (identity mapping) - all users incl. neg-only
     all_users = np.unique(np.concatenate([
@@ -143,49 +145,43 @@ def main() -> None:
     if args.hero:
         custom_mlflow, _ = init_hero_mlflow(pipeline)
 
-    # item_feature comes from config
+    # item_feature and use_negatives come from config
     item_feature = pipeline.cfg.get('data.item_feature', 'indicator')
+    use_negatives = pipeline.cfg.get('data.use_negatives', True)
 
-    # Load Zazzle data for requested event type
+    # Load Zazzle data once (factory reuses this across sweep expts)
     print(f"Loading Zazzle data (event_type={args.event_type})...")
     data = load_zazzle(event_type=args.event_type)
 
-    # Build UserItemData
+    # Build UserItemData from config defaults
     print("\nBuilding UserItemData...")
     ui = build_user_item_data(
         data=data,
         item_feature=item_feature,
-        name=f'zazzle_{args.event_type}_{item_feature}'
+        name=f'zazzle_{args.event_type}_{item_feature}',
+        use_negatives=use_negatives,
     )
+
+    # Factory rebuilds ui when sweep changes data.* params
+    def ui_factory(cfg: dict) -> UserItemData:
+        """Rebuild UserItemData from per-experiment config."""
+        feat = cfg.get('data.item_feature', item_feature)
+        use_neg = cfg.get('data.use_negatives', True)
+        return build_user_item_data(
+            data=data,
+            item_feature=feat,
+            name=f'zazzle_{args.event_type}_{feat}',
+            use_negatives=use_neg,
+        )
 
     # Run training or sweep (MLflow handled by pipeline)
     mlflow_kwargs = (
         {"custom_mlflow": custom_mlflow} if custom_mlflow else {}
     )
-    run_ids = pipeline.run(
+    pipeline.run(
         ui, sweep=args.sweep, num_processes=args.n_jobs,
-        **mlflow_kwargs
+        ui_factory=ui_factory, **mlflow_kwargs
     )
-
-    # Plot single run and save figure (local MLflow only)
-    if not args.sweep and run_ids and not args.hero:
-        import matplotlib.pyplot as plt
-        from hybridbpr import MLflowPlotter
-
-        os.makedirs('figs', exist_ok=True)
-        plotter = MLflowPlotter(
-            tracking_uri=pipeline.cfg['mlflow.tracking_uri']
-        )
-        fig = plotter.plot_single_run(
-            run_id=run_ids[0],
-            figsize=(14, 5),
-            std_width=2.0,
-            show_std=True
-        )
-        save_path = f'figs/single_run_{run_ids[0]}.png'
-        fig.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"\nPlot saved to: {save_path}")
-        plt.close(fig)
 
 
 if __name__ == '__main__':

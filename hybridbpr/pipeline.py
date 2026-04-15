@@ -15,21 +15,21 @@ from .interactions import UserItemData
 from .mf import MatrixFactorization
 from .losses import LossFn
 
-# Abbreviations for sweep param keys in run names
-_KEY_ABBREVS: Dict[str, str] = {
-    'n_latent': 'nl',
-    'item_feature': 'feat',
-    'loss_function': 'loss',
-    'weight_decay': 'wd',
-    'batch_size': 'bs',
-    'n_iter': 'ni',
-    'learning_rate': 'lr',
-}
-
 # Suppress verbose MLflow/alembic migration logs
 logging.getLogger("alembic").setLevel(logging.WARNING)
 logging.getLogger("mlflow").setLevel(logging.WARNING)
 logging.getLogger("mlflow.utils.environment").setLevel(logging.ERROR)
+
+
+def _set_experiment_safe(
+    mlflow_module: Any, name: str
+) -> None:
+    """Set MLflow experiment, restoring it if deleted."""
+    client = mlflow_module.MlflowClient()
+    exp = client.get_experiment_by_name(name)
+    if exp is not None and exp.lifecycle_stage == "deleted":
+        client.restore_experiment(exp.experiment_id)
+    mlflow_module.set_experiment(name)
 
 
 class TrainingPipeline:
@@ -129,7 +129,8 @@ class TrainingPipeline:
         ui: UserItemData,
         sweep: bool = False,
         custom_mlflow: Optional[Any] = None,
-        num_processes: Optional[int] = None
+        num_processes: Optional[int] = None,
+        ui_factory: Optional[Callable[[Dict], UserItemData]] = None,
     ) -> List[str]:
         """Run training; sweep=True runs full grid search."""
         # Use custom mlflow if provided, otherwise use default
@@ -138,14 +139,9 @@ class TrainingPipeline:
         # Set MLflow tracking and experiment only if custom mlflow not supplied
         if custom_mlflow is None:
             mlflow_module.set_tracking_uri(self.cfg['mlflow.tracking_uri'])
-            mlflow_module.set_experiment(
-                self.cfg['mlflow.experiment_name']
-            )
-        else:
-            # For custom mlflow, only set experiment
-            mlflow_module.set_experiment(
-                self.cfg['mlflow.experiment_name']
-            )
+        _set_experiment_safe(
+            mlflow_module, self.cfg['mlflow.experiment_name']
+        )
 
         # Run sweep or single training
         if sweep:
@@ -160,9 +156,9 @@ class TrainingPipeline:
                 mlflow_experiment_name=self.cfg.get(
                     'mlflow.experiment_name'
                 ),
-                base_run_name=ui.name,
                 num_processes=num_processes,
-                custom_mlflow=custom_mlflow
+                custom_mlflow=custom_mlflow,
+                ui_factory=ui_factory,
             )
             print(
                 f"\nSweep completed: {len(results)} experiments"
@@ -170,7 +166,7 @@ class TrainingPipeline:
             return results
         else:
             print("\nTraining single model...")
-            with mlflow_module.start_run(run_name=ui.name) as run:
+            with mlflow_module.start_run() as run:
                 self.train(ui, custom_mlflow=custom_mlflow)
                 print("\nTraining completed!")
                 print(f"MLflow run ID: {run.info.run_id}")
@@ -188,7 +184,7 @@ class TrainingPipeline:
 
         # Determine run name
         if run_name is None:
-            run_name = ui.name
+            run_name = "run"
 
         # Log all config parameters to MLflow
         mlflow_module.log_params(self.cfg)
@@ -214,13 +210,39 @@ class TrainingPipeline:
             optimizer_name, **optimizer_params
         )
 
-        # Split data into train/test
-        print(f"Starting training: {run_name}", flush=True)
-        train_ratio = self.cfg.get('data.train_ratio_pos', 0.8)
-        ui.split_train_test(
-            train_ratio=train_ratio,
-            random_state=self.cfg.get('data.random_state', None)
+        # Split data into train/test according to split_mode
+        split_mode = self.cfg.get('data.split_mode', 'warm')
+        print(
+            f"Starting training: {run_name}"
+            f" | split_mode={split_mode}",
+            flush=True,
         )
+        if split_mode == 'cold':
+            ui.split_train_test_cold(
+                cold_item_ratio=self.cfg.get(
+                    'data.cold_item_ratio', 0.2
+                ),
+                random_state=self.cfg.get(
+                    'data.random_state', None
+                ),
+            )
+        elif split_mode == 'warm':
+            ui.split_train_test(
+                train_ratio=self.cfg.get(
+                    'data.warm_train_ratio_pos', 0.8
+                ),
+                train_ratio_neg=self.cfg.get(
+                    'data.warm_train_ratio_neg', 0.8
+                ),
+                random_state=self.cfg.get(
+                    'data.random_state', None
+                ),
+            )
+        else:
+            raise ValueError(
+                f"Unknown split_mode '{split_mode}'."
+                " Use 'warm' or 'cold'."
+            )
 
         # Build RecommendationSystem
         device = torch.device(
@@ -232,16 +254,19 @@ class TrainingPipeline:
             optimizer=optimizer,
             loss=loss_fn,
             device=device,
+            use_negs_for_training=self.cfg.get(
+                'data.use_negs_for_training', False
+            ),
         )
 
         # Train the model
         recommender.fit(
             n_iter=self.cfg['training.n_iter'],
-            n_eval_items=self.cfg.get('training.n_eval_items', 100),
             batch_size=self.cfg['training.batch_size'],
             eval_every=self.cfg['training.eval_every'],
             n_eval_users=self.cfg.get('training.n_eval_users'),
             top_k=self.cfg.get('training.top_k', 10),
+            neg_ratio=self.cfg.get('training.neg_ratio', 1.0),
             early_stopping_patience=self.cfg[
                 'training.early_stopping_patience'
             ],
@@ -256,9 +281,11 @@ class TrainingPipeline:
         ui: UserItemData,
         param_grid: Dict[str, List],
         mlflow_experiment_name: Optional[str] = None,
-        base_run_name: Optional[str] = None,
         num_processes: Optional[int] = None,
-        custom_mlflow: Optional[Any] = None
+        custom_mlflow: Optional[Any] = None,
+        ui_factory: Optional[
+            Callable[[Dict], UserItemData]
+        ] = None,
     ) -> List[str]:
         """Run hyperparameter grid search in parallel."""
         # Use custom mlflow if provided, otherwise use default
@@ -273,7 +300,7 @@ class TrainingPipeline:
 
         # Set MLflow experiment
         if mlflow_experiment_name:
-            mlflow_module.set_experiment(mlflow_experiment_name)
+            _set_experiment_safe(mlflow_module, mlflow_experiment_name)
 
         # Generate all parameter combinations
         all_params = self._generate_param_combinations(param_grid)
@@ -301,12 +328,12 @@ class TrainingPipeline:
             f"({total_cores} cores available)"
         )
 
-        # Create partial function with fixed ui
+        # Create partial function with fixed ui and optional factory
         run_single = partial(
             self._run_single_experiment,
             ui=ui,
-            base_run_name=base_run_name or ui.name,
-            custom_mlflow=custom_mlflow
+            custom_mlflow=custom_mlflow,
+            ui_factory=ui_factory,
         )
 
         # Run experiments in parallel with progress tracking
@@ -355,29 +382,33 @@ class TrainingPipeline:
         self,
         params: Dict[str, Any],
         ui: UserItemData,
-        base_run_name: str,
-        custom_mlflow: Optional[Any] = None
+        custom_mlflow: Optional[Any] = None,
+        ui_factory: Optional[
+            Callable[[Dict], UserItemData]
+        ] = None,
     ) -> str:
         """Run one experiment; returns SUCCESS/FAILED status string."""
         # Use custom mlflow if provided, otherwise use default
-        mlflow_module = custom_mlflow if custom_mlflow is not None else mlflow
+        mlflow_module = (
+            custom_mlflow if custom_mlflow is not None else mlflow
+        )
 
-        # Set tracking URI in subprocess (multiprocessing resets global state)
+        # Set tracking URI in subprocess (multiprocessing resets state)
         if custom_mlflow is None:
             mlflow_module.set_tracking_uri(
                 self.cfg['mlflow.tracking_uri']
             )
-            mlflow_module.set_experiment(
-                self.cfg['mlflow.experiment_name']
-            )
+        _set_experiment_safe(
+            mlflow_module, self.cfg['mlflow.experiment_name']
+        )
 
         run_name = "unknown"
         try:
             # Create copy of config for this experiment
             experiment_config = self.cfg_raw.copy()
 
-            # Generate run name from parameters
-            run_name_parts = [base_run_name]
+            # Generate run name from parameters (no dataset prefix)
+            run_name_parts: List[str] = []
 
             # Update experiment config with param grid values
             for param_name, param_value in params.items():
@@ -387,18 +418,15 @@ class TrainingPipeline:
                         experiment_config[section] = {}
                     experiment_config[section][key] = param_value
 
-                    # Add abbreviated key=value to run name
-                    abbrev = _KEY_ABBREVS.get(key, key)
+                    # Add param value to run name
                     if key == 'loss_function' and callable(
                         param_value
                     ):
                         run_name_parts.append(
-                            f"{abbrev}{param_value.__name__}"
+                            param_value.__name__
                         )
                     else:
-                        run_name_parts.append(
-                            f"{abbrev}{param_value}"
-                        )
+                        run_name_parts.append(param_value)
 
             run_name = '_'.join(str(p) for p in run_name_parts)
 
@@ -407,11 +435,23 @@ class TrainingPipeline:
                 config=experiment_config
             )
 
+            # Rebuild ui if factory provided and data params changed
+            experiment_ui = ui
+            if ui_factory is not None:
+                data_params = {
+                    k: v for k, v in params.items()
+                    if k.startswith('data.')
+                }
+                if data_params:
+                    experiment_ui = ui_factory(
+                        experiment_pipeline.cfg
+                    )
+
             # Start MLflow run for this experiment
             with mlflow_module.start_run(run_name=run_name):
                 # Train model with MLflow run
                 experiment_pipeline.train(
-                    ui=ui, run_name=run_name,
+                    ui=experiment_ui, run_name=run_name,
                     custom_mlflow=custom_mlflow
                 )
 
@@ -447,16 +487,16 @@ class TrainingPipeline:
                 'batch_size': 1000,
                 'eval_every': 5,
                 'n_eval_users': None,  # None = all users
-                'n_eval_items': 100,
                 'early_stopping_patience': 10,
                 'log_level': 1
             },
             'data': {
                 'cache_dir': None,
                 'item_feature': 'metadata',
-                'neg_option': 'neg-ignore',
-                'rating_threshold': 3.5,
-                'train_ratio_pos': 0.8,
+                'rating_threshold': 3.0,
+                'warm_train_ratio_pos': 0.8,
+                'warm_train_ratio_neg': 0.8,
+                'use_negs_for_training': False,
             },
             'mlflow': {
                 'experiment_name': 'movielens_pipeline',

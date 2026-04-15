@@ -3,39 +3,48 @@
 
 # Model architecture
 model:
-  n_latent: 64    # Latent factors/dimensions
+  n_latent: 256    # Latent factors/dimensions
   sparse: false   # Sparse gradients for embeddings
   init_std: 0.1   # Weight initialization std dev
 
 # Optimizer
 optimizer:
   name: 'Adam'                     # 'Adam', 'SGD', 'AdamW', 'RMSprop'
-  lr: 0.001                        # Learning rate
+  lr: 0.0005                        # Learning rate
   weight_decay: 0.0000               # L2 regularization
 
 # Training
 training:
   loss_function: 'bpr_loss'       # Loss function
   n_iter: 5000                     # Training iterations
-  batch_size: 512                # Batch size
-  eval_every: 50                   # Evaluation frequency
-  n_eval_users: 10000              # Users to evaluate (null = all)
-  n_eval_items: null               # Neg candidates per eval user (null=all)
+  batch_size: 20000                # Batch size
+  eval_every: 20                   # Evaluation frequency
+  n_eval_users: 5000              # Users to evaluate (null = all)
   top_k: 20                       # Rank cutoff for NDCG/P/R metrics
-  early_stopping_patience: 500    # Early stopping patience (epochs)
+  neg_ratio: 10.0                  # Neg/pos ratio for eval candidates
+  early_stopping_patience: 1000    # Early stopping patience (epochs)
   log_level: 1                    # Logging verbosity
 
 # Data processing
 data:
   item_feature: 'indicator'        # 'metadata', 'indicator', 'both'
-  train_ratio_pos: 0.8            # Positive train ratio
+  split_mode: 'warm'               # 'warm' or 'cold'
+  cold_item_ratio: 0.4             # Fraction of items held out (cold only)
+  warm_train_ratio_pos: 0.8        # Warm split: pos train ratio
+  warm_train_ratio_neg: 0.5        # Warm split: neg train ratio
+  use_negs_for_training: false     # Use explicit neg train split in BPR
 
 # MLflow
 mlflow:
-  experiment_name: 'mlruns3'  # Experiment name
+  experiment_name: 't12'  # Experiment name
   tracking_uri: 'sqlite:///mlflow.db'    # Tracking URI
 
 # Comprehensive parameter sweep (all relevant parameters)
 sweep:
-  model.n_latent: [32, 64, 128]
-  data.item_feature: ['metadata', 'indicator', 'both']
+  data.item_feature: ['metadata', 'indicator']
+  data.split_mode: ['warm', 'cold']
+  data.use_negs_for_training: [false, true]
+  #model.n_latent: [128, 256]
+  training.neg_ratio: [1, 5]
+  #training.top_k: [20, 50]
+  #data.warm_train_ratio_neg: [0.6, 0.8, 1.0]

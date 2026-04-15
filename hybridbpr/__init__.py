@@ -20,8 +20,5 @@ from .zazzle import load_zazzle as load_zazzle
 # Pipeline
 from .pipeline import TrainingPipeline
 
-# Visualization
-from .plotter import MLflowPlotter
-
 # Utilities
 from .utils import init_hero_mlflow

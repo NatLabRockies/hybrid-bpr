@@ -37,6 +37,8 @@ class UserItemData:
         # Train/test split results (None until split_train_test called)
         self.Rpos_train: Optional[sp.coo_matrix] = None
         self.Rpos_test: Optional[sp.coo_matrix] = None
+        self.Rneg_train: Optional[sp.coo_matrix] = None
+        self.Rneg_test: Optional[sp.coo_matrix] = None
 
         # ID <-> index mappings for each entity type
         self._id_to_idx_mappings = {
@@ -534,34 +536,30 @@ class UserItemData:
         """Item features matrix."""
         return self._Fi
 
-    def split_train_test(
+    def _split_matrix(
         self,
-        train_ratio: float = 0.8,
-        random_state: Optional[int] = None
-    ) -> None:
-        """Split pos interactions into train/test; negatives to train."""
-        if not 0 <= train_ratio <= 1:
-            raise ValueError(
-                "train_ratio must be between 0 and 1 inclusive"
+        m: sp.coo_matrix,
+        train_ratio: float,
+        rng: RandomState,
+        guarantee_train_entry: bool = True,
+    ) -> Tuple[sp.coo_matrix, sp.coo_matrix]:
+        """Split a COO matrix into train/test by row-wise ratio."""
+        if m.nnz == 0:
+            return (
+                sp.coo_matrix(m.shape, dtype=self.dtype),
+                sp.coo_matrix(m.shape, dtype=self.dtype),
             )
-        m = self._Rpos
 
-        # Handle boundary ratios
-        if train_ratio == 0:
-            self.Rpos_train = sp.coo_matrix(m.shape)
-            self.Rpos_test = m
-        elif train_ratio == 1:
-            self.Rpos_train = m
-            self.Rpos_test = sp.coo_matrix(m.shape)
-        else:
-            rng = RandomState(random_state)
-            rows, cols, data = m.row, m.col, m.data
+        rows, cols, data = m.row, m.col, m.data
 
-            # Random split then ensure every user has ≥1 train entry
-            idx = np.arange(m.nnz)
-            rng.shuffle(idx)
-            is_train = np.zeros(m.nnz, dtype=bool)
-            is_train[idx[:int(m.nnz * train_ratio)]] = True
+        # Random split
+        idx = np.arange(m.nnz)
+        rng.shuffle(idx)
+        is_train = np.zeros(m.nnz, dtype=bool)
+        is_train[idx[:int(m.nnz * train_ratio)]] = True
+
+        # Ensure every user with entries has ≥1 in train
+        if guarantee_train_entry:
             for user in np.setdiff1d(
                 np.unique(rows), np.unique(rows[is_train])
             ):
@@ -571,17 +569,141 @@ class UserItemData:
                 if len(candidates):
                     is_train[rng.choice(candidates)] = True
 
-            # Build split matrices
-            tr = np.where(is_train)[0]
-            te = np.where(~is_train)[0]
-            self.Rpos_train = sp.coo_matrix(
-                (data[tr], (rows[tr], cols[tr])), shape=m.shape
-            )
-            self.Rpos_test = sp.coo_matrix(
-                (data[te], (rows[te], cols[te])), shape=m.shape
+        tr = np.where(is_train)[0]
+        te = np.where(~is_train)[0]
+        m_train = sp.coo_matrix(
+            (data[tr], (rows[tr], cols[tr])), shape=m.shape
+        )
+        m_test = sp.coo_matrix(
+            (data[te], (rows[te], cols[te])), shape=m.shape
+        )
+        return m_train, m_test
+
+    def split_train_test(
+        self,
+        train_ratio: float = 0.8,
+        train_ratio_neg: float = 0.8,
+        random_state: Optional[int] = None
+    ) -> None:
+        """Split pos+neg interactions into train/test sets."""
+        for ratio, name in [
+            (train_ratio, 'train_ratio'),
+            (train_ratio_neg, 'train_ratio_neg'),
+        ]:
+            if not 0 <= ratio <= 1:
+                raise ValueError(
+                    f"{name} must be between 0 and 1 inclusive"
+                )
+
+        rng = RandomState(random_state)
+
+        # Handle boundary ratios for positives
+        m = self._Rpos
+        if train_ratio == 0:
+            self.Rpos_train = sp.coo_matrix(m.shape, dtype=self.dtype)
+            self.Rpos_test = m
+        elif train_ratio == 1:
+            self.Rpos_train = m
+            self.Rpos_test = sp.coo_matrix(m.shape, dtype=self.dtype)
+        else:
+            self.Rpos_train, self.Rpos_test = self._split_matrix(
+                m, train_ratio, rng, guarantee_train_entry=True
             )
 
         print(
-            f"Split: {self.Rpos_train.nnz:,} train / "
+            f"Pos split: {self.Rpos_train.nnz:,} train / "
             f"{self.Rpos_test.nnz:,} test (ratio={train_ratio})"
+        )
+
+        # Handle boundary ratios for negatives
+        n = self._Rneg
+        if n.nnz == 0:
+            self.Rneg_train = sp.coo_matrix(n.shape, dtype=self.dtype)
+            self.Rneg_test = sp.coo_matrix(n.shape, dtype=self.dtype)
+        elif train_ratio_neg == 0:
+            self.Rneg_train = sp.coo_matrix(n.shape, dtype=self.dtype)
+            self.Rneg_test = n
+        elif train_ratio_neg == 1:
+            self.Rneg_train = n
+            self.Rneg_test = sp.coo_matrix(n.shape, dtype=self.dtype)
+        else:
+            self.Rneg_train, self.Rneg_test = self._split_matrix(
+                n, train_ratio_neg, rng, guarantee_train_entry=True
+            )
+
+        print(
+            f"Neg split: {self.Rneg_train.nnz:,} train / "
+            f"{self.Rneg_test.nnz:,} test"
+            f" (ratio={train_ratio_neg})"
+        )
+
+    def split_train_test_cold(
+        self,
+        cold_item_ratio: float = 0.2,
+        random_state: Optional[int] = None,
+    ) -> None:
+        """Cold-start split: rare items→test only, warm→train only.
+
+        Cold items are the least-interacted (by total pos+neg count).
+        Ties broken randomly. All cold interactions go to test; all
+        warm interactions go to train.
+        """
+        if not 0 < cold_item_ratio < 1:
+            raise ValueError(
+                "cold_item_ratio must be strictly between 0 and 1"
+            )
+
+        rng = RandomState(random_state)
+
+        # Designate cold items as least-interacted by total count;
+        # break ties randomly to avoid systematic bias
+        pos_csr = self._Rpos.tocsr()
+        neg_csr = self._Rneg.tocsr()
+        item_counts = (
+            np.array(pos_csr.sum(axis=0)).flatten()
+            + np.array(neg_csr.sum(axis=0)).flatten()
+        )
+        noise = rng.uniform(0, 1e-6, size=len(item_counts))
+        sorted_by_count = np.argsort(
+            item_counts + noise, kind='stable'
+        )
+        n_cold = max(1, int(self.n_items * cold_item_ratio))
+        cold_arr = np.sort(sorted_by_count[:n_cold])
+        print(
+            f"Cold split: {n_cold}/{self.n_items} cold items"
+            f" ({cold_item_ratio:.0%})"
+            f" | max cold interactions:"
+            f" {int(item_counts[cold_arr].max())}"
+        )
+
+        # Route each interaction to train (warm) or test (cold)
+        def _split(
+            m: sp.coo_matrix,
+        ) -> Tuple[sp.coo_matrix, sp.coo_matrix]:
+            if m.nnz == 0:
+                empty = sp.coo_matrix(m.shape, dtype=self.dtype)
+                return empty, empty
+            is_cold = np.isin(m.col, cold_arr)
+            tr = np.where(~is_cold)[0]
+            te = np.where(is_cold)[0]
+            m_train = sp.coo_matrix(
+                (m.data[tr], (m.row[tr], m.col[tr])),
+                shape=m.shape, dtype=self.dtype,
+            )
+            m_test = sp.coo_matrix(
+                (m.data[te], (m.row[te], m.col[te])),
+                shape=m.shape, dtype=self.dtype,
+            )
+            return m_train, m_test
+
+        # Split positive and negative interactions
+        self.Rpos_train, self.Rpos_test = _split(self._Rpos)
+        print(
+            f"Pos cold split: {self.Rpos_train.nnz:,} train / "
+            f"{self.Rpos_test.nnz:,} test"
+        )
+        self.Rneg_train, self.Rneg_test = _split(self._Rneg)
+        print(
+            f"Neg cold split: {self.Rneg_train.nnz:,} train / "
+            f"{self.Rneg_test.nnz:,} test"
         )

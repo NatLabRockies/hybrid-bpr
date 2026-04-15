@@ -380,7 +380,7 @@ FEATURE_DATASETS = ['ml-100k', 'ml-10m', 'ml-20m', 'ml-25m']
 
 
 def _preprocess_ml10m(raw: dict) -> dict:
-    """Normalize ml-10m text tags → integer feature IDs."""
+    """Normalize ml-10m text tags → integer feature IDs + IDF weights."""
     # Rename rating columns to match standard format
     rdf = raw['ratings'].copy()
     rdf.columns = ['UserID', 'MovieID', 'Rating', 'Timestamp']
@@ -392,7 +392,15 @@ def _preprocess_ml10m(raw: dict) -> dict:
         ['MovieID', 'TagID']
     ]
 
-    # Keep only movies with tag features
+    # Compute IDF weights: rare tags are more discriminative
+    n_movies = tdf.MovieID.nunique()
+    doc_freq = tdf.groupby('TagID')['MovieID'].nunique()
+    idf = np.log(n_movies / doc_freq).rename('idf')
+    tdf = tdf.join(idf, on='TagID')
+    tdf = tdf.rename(columns={'idf': 'relevance'})
+
+    # Keep only movies with tag features; this also ensures negatives
+    # from rdf are restricted to tagged movies only (Fix 1)
     rdf = rdf[rdf.MovieID.isin(tdf.MovieID.unique())].copy()
     return {'ratings': rdf, 'features': tdf}
 
@@ -422,7 +430,6 @@ def load_movielens_ui(
     dataset: str,
     rating_threshold: float,
     item_feature: str,
-    use_negatives: bool = False,
     name: Optional[str] = None
 ) -> UserItemData:
     """Load MovieLens dataset and return a UserItemData object."""
@@ -446,11 +453,8 @@ def load_movielens_ui(
         else None
     )
 
-    # Initialize UserItemData (append _neg suffix when negatives used)
-    _name = name or dataset
-    ui = UserItemData(
-        name=f'{_name}_neg' if use_negatives else _name
-    )
+    # Initialize UserItemData
+    ui = UserItemData(name=name or dataset)
 
     # Add positive interactions (ratings at or above threshold)
     pos_mask = rdf.Rating >= rating_threshold
@@ -459,13 +463,12 @@ def load_movielens_ui(
         item_ids=rdf.MovieID[pos_mask].values
     )
 
-    # Optionally add negative interactions (ratings below threshold)
-    if use_negatives:
-        neg_mask = rdf.Rating < rating_threshold
-        ui.add_negative_interactions(
-            user_ids=rdf.UserID[neg_mask].values,
-            item_ids=rdf.MovieID[neg_mask].values
-        )
+    # Always add explicit negative interactions (below threshold)
+    neg_mask = rdf.Rating < rating_threshold
+    ui.add_negative_interactions(
+        user_ids=rdf.UserID[neg_mask].values,
+        item_ids=rdf.MovieID[neg_mask].values
+    )
 
     # Add user features (identity mapping)
     unique_users = rdf.UserID.unique()

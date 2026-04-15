@@ -22,13 +22,14 @@ training:
   n_eval_users: 10000             # Users to evaluate (null = all)
   n_eval_items: 1000              # Neg candidates per eval user
   top_k: 20                       # Rank cutoff for NDCG/P/R metrics
-  early_stopping_patience: 1000   # Early stopping patience
+  early_stopping_patience: 100   # Early stopping patience
   log_level: 1                    # Logging verbosity
 
 # Data processing
 data:
   item_feature: 'indicator'       # 'metadata', 'indicator', 'both'
-  train_ratio_pos: 0.8            # Positive train ratio
+  warm_train_ratio_pos: 0.8       # Warm split: pos train ratio
+  use_negatives: true             # Use explicit negatives in training
 
 # MLflow
 mlflow:
@@ -39,4 +40,5 @@ mlflow:
 sweep:
   model.n_latent: [64, 128, 256]
   data.item_feature: ['metadata', 'indicator', 'both']
+  data.use_negatives: [false, true]
 

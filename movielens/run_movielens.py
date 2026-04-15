@@ -10,7 +10,7 @@ import argparse
 import os
 
 from hybridbpr import (
-    TrainingPipeline, init_hero_mlflow,
+    TrainingPipeline, UserItemData, init_hero_mlflow,
     load_movielens_ui, FEATURE_DATASETS
 )
 
@@ -40,8 +40,8 @@ def main() -> None:
     parser.add_argument(
         '--rating-threshold',
         type=float,
-        default=3.5,
-        help='Min rating to count as a positive interaction'
+        default=3.0,
+        help='Min rating for positive; below this = negative'
     )
     parser.add_argument(
         '--sweep',
@@ -59,6 +59,12 @@ def main() -> None:
         action='store_true',
         help='Log to Hero ML Model Registry instead of local MLflow'
     )
+    parser.add_argument(
+        '--experiment',
+        type=str,
+        default=None,
+        help='MLflow experiment base name (overrides config value)'
+    )
     args = parser.parse_args()
 
     # Initialize training pipeline from config
@@ -66,7 +72,7 @@ def main() -> None:
     pipeline = TrainingPipeline(config_path=args.config)
 
     # Append dataset name to experiment for per-dataset separation
-    base_exp = pipeline.cfg.get(
+    base_exp = args.experiment or pipeline.cfg.get(
         'mlflow.experiment_name', 'movielens'
     )
     pipeline.cfg['mlflow.experiment_name'] = (
@@ -78,56 +84,38 @@ def main() -> None:
     if args.hero:
         custom_mlflow, _ = init_hero_mlflow(pipeline)
 
-    # item_feature comes from config; rating_threshold from CLI arg
+    # item_feature comes from config; negatives always loaded
     rating_threshold = args.rating_threshold
     item_feature = pipeline.cfg.get('data.item_feature', 'metadata')
 
-    # Build both variants: without and with negative interactions
+    # Build UserItemData from config defaults
     print(f"\nLoading {args.dataset} and building UserItemData...")
-    ui_variants = [
-        load_movielens_ui(
+    ui = load_movielens_ui(
+        dataset=args.dataset,
+        rating_threshold=rating_threshold,
+        item_feature=item_feature,
+    )
+
+    # Factory rebuilds ui when sweep changes data.* params
+    def ui_factory(cfg: dict) -> UserItemData:
+        """Rebuild UserItemData from per-experiment config."""
+        return load_movielens_ui(
             dataset=args.dataset,
             rating_threshold=rating_threshold,
-            item_feature=item_feature,
-            use_negatives=use_neg
+            item_feature=cfg.get('data.item_feature', item_feature),
         )
-        for use_neg in (False, True)
-    ]
 
-    # Run training or sweep for each variant
+    # Run training or sweep
     mlflow_kwargs = (
         {"custom_mlflow": custom_mlflow} if custom_mlflow else {}
     )
-    all_run_ids = []
-    for ui in ui_variants:
-        print(f"\n--- Running variant: {ui.name} ---")
-        run_ids = pipeline.run(
-            ui,
-            sweep=args.sweep,
-            num_processes=args.n_jobs,
-            **mlflow_kwargs
-        )
-        all_run_ids.extend(run_ids or [])
-
-    # Plot first single run and save figure (local MLflow only)
-    if not args.sweep and all_run_ids and not args.hero:
-        import matplotlib.pyplot as plt
-        from hybridbpr import MLflowPlotter
-
-        os.makedirs('figs', exist_ok=True)
-        plotter = MLflowPlotter(
-            tracking_uri=pipeline.cfg['mlflow.tracking_uri']
-        )
-        fig = plotter.plot_single_run(
-            run_id=all_run_ids[0],
-            figsize=(14, 5),
-            std_width=2.0,
-            show_std=True
-        )
-        save_path = f'figs/single_run_{all_run_ids[0]}.png'
-        fig.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"\nPlot saved to: {save_path}")
-        plt.close(fig)
+    all_run_ids = pipeline.run(
+        ui,
+        sweep=args.sweep,
+        num_processes=args.n_jobs,
+        ui_factory=ui_factory,
+        **mlflow_kwargs
+    ) or []
 
 
 if __name__ == '__main__':
