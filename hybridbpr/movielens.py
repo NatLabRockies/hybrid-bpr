@@ -407,7 +407,7 @@ def _preprocess_ml10m(raw: dict) -> dict:
 
 def _preprocess_mlgenome(
     raw: dict,
-    relevance_threshold: float = 0.5
+    relevance_threshold: float = 0.8
 ) -> dict:
     """Normalize ml-20m/25m genome scores → feature IDs + weights."""
     # Rename rating columns to match standard format
@@ -430,7 +430,8 @@ def load_movielens_ui(
     dataset: str,
     rating_threshold: float,
     item_feature: str,
-    name: Optional[str] = None
+    name: Optional[str] = None,
+    genome_relevance_threshold: float = 0.8
 ) -> UserItemData:
     """Load MovieLens dataset and return a UserItemData object."""
     # Load and normalize dataset
@@ -441,7 +442,9 @@ def load_movielens_ui(
         data = _preprocess_ml10m(raw)
     else:
         raw = load_movielens(dataset=dataset, preprocess=False)
-        data = _preprocess_mlgenome(raw)
+        data = _preprocess_mlgenome(
+            raw, relevance_threshold=genome_relevance_threshold
+        )
 
     rdf = data['ratings']
     tdf = data['features']

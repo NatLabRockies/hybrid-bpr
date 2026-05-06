@@ -18,7 +18,6 @@ def build_user_item_data(
     data: dict,
     item_feature: str,
     name: str,
-    use_negatives: bool = True,
 ) -> UserItemData:
     """Build UserItemData from Zazzle data dict."""
     pos = data['positives']
@@ -34,16 +33,16 @@ def build_user_item_data(
     # Initialize UserItemData
     ui = UserItemData(name=name)
 
-    # Add positive interactions; optionally add explicit negatives
+    # Add interactions; use_negs_for_training is a pipeline setting,
+    # so always load negatives into UserItemData
     ui.add_positive_interactions(
         user_ids=pos['UserID'].values,
         item_ids=pos['ProductID'].values
     )
-    if use_negatives:
-        ui.add_negative_interactions(
-            user_ids=neg['UserID'].values,
-            item_ids=neg['ProductID'].values
-        )
+    ui.add_negative_interactions(
+        user_ids=neg['UserID'].values,
+        item_ids=neg['ProductID'].values
+    )
 
     # Add user features (identity mapping) - all users incl. neg-only
     all_users = np.unique(np.concatenate([
@@ -145,9 +144,8 @@ def main() -> None:
     if args.hero:
         custom_mlflow, _ = init_hero_mlflow(pipeline)
 
-    # item_feature and use_negatives come from config
-    item_feature = pipeline.cfg.get('data.item_feature', 'indicator')
-    use_negatives = pipeline.cfg.get('data.use_negatives', True)
+    # item_feature comes from config; negatives always loaded
+    item_feature = pipeline.cfg.get('data.item_feature', 'metadata')
 
     # Load Zazzle data once (factory reuses this across sweep expts)
     print(f"Loading Zazzle data (event_type={args.event_type})...")
@@ -159,19 +157,16 @@ def main() -> None:
         data=data,
         item_feature=item_feature,
         name=f'zazzle_{args.event_type}_{item_feature}',
-        use_negatives=use_negatives,
     )
 
-    # Factory rebuilds ui when sweep changes data.* params
+    # Factory rebuilds ui when sweep changes data.item_feature
     def ui_factory(cfg: dict) -> UserItemData:
         """Rebuild UserItemData from per-experiment config."""
         feat = cfg.get('data.item_feature', item_feature)
-        use_neg = cfg.get('data.use_negatives', True)
         return build_user_item_data(
             data=data,
             item_feature=feat,
             name=f'zazzle_{args.event_type}_{feat}',
-            use_negatives=use_neg,
         )
 
     # Run training or sweep (MLflow handled by pipeline)

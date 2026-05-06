@@ -1,5 +1,6 @@
 """Training pipeline for PyBPR recommendation system."""
 
+import sqlite3
 import yaml
 import torch
 import itertools
@@ -10,7 +11,7 @@ from typing import Dict, List, Any, Optional, Callable
 import mlflow
 from pathos.multiprocessing import ProcessPool, cpu_count
 
-from .recommender import RecommendationSystem
+from .recommender import RecommendationSystem, _mlflow_log
 from .interactions import UserItemData
 from .mf import MatrixFactorization
 from .losses import LossFn
@@ -19,6 +20,16 @@ from .losses import LossFn
 logging.getLogger("alembic").setLevel(logging.WARNING)
 logging.getLogger("mlflow").setLevel(logging.WARNING)
 logging.getLogger("mlflow.utils.environment").setLevel(logging.ERROR)
+
+
+def _configure_sqlite(tracking_uri: str) -> None:
+    """Enable WAL mode on SQLite DB to reduce write contention."""
+    if not tracking_uri.startswith('sqlite:///'):
+        return
+    db_path = tracking_uri[len('sqlite:///'):]
+    with sqlite3.connect(db_path) as conn:
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=60000')
 
 
 def _set_experiment_safe(
@@ -99,6 +110,7 @@ class TrainingPipeline:
         # Map optimizer names to torch classes
         optimizer_map = {
             'Adam': torch.optim.Adam,
+            'Adagrad': torch.optim.Adagrad,
             'SGD': torch.optim.SGD,
             'AdamW': torch.optim.AdamW,
             'RMSprop': torch.optim.RMSprop,
@@ -187,7 +199,7 @@ class TrainingPipeline:
             run_name = "run"
 
         # Log all config parameters to MLflow
-        mlflow_module.log_params(self.cfg)
+        _mlflow_log(mlflow_module.log_params, self.cfg)
 
         # Get loss function; bind num_items for WARP
         loss_name = self.cfg['training.loss_function']
@@ -229,10 +241,10 @@ class TrainingPipeline:
         elif split_mode == 'warm':
             ui.split_train_test(
                 train_ratio=self.cfg.get(
-                    'data.warm_train_ratio_pos', 0.8
+                    'data.warm_train_ratio', 0.8
                 ),
                 train_ratio_neg=self.cfg.get(
-                    'data.warm_train_ratio_neg', 0.8
+                    'data.warm_train_ratio', 0.8
                 ),
                 random_state=self.cfg.get(
                     'data.random_state', None
@@ -301,6 +313,10 @@ class TrainingPipeline:
         # Set MLflow experiment
         if mlflow_experiment_name:
             _set_experiment_safe(mlflow_module, mlflow_experiment_name)
+
+        # Enable WAL mode for SQLite to reduce write contention
+        if custom_mlflow is None:
+            _configure_sqlite(self.cfg['mlflow.tracking_uri'])
 
         # Generate all parameter combinations
         all_params = self._generate_param_combinations(param_grid)
@@ -494,8 +510,7 @@ class TrainingPipeline:
                 'cache_dir': None,
                 'item_feature': 'metadata',
                 'rating_threshold': 3.0,
-                'warm_train_ratio_pos': 0.8,
-                'warm_train_ratio_neg': 0.8,
+                'warm_train_ratio': 0.8,
                 'use_negs_for_training': False,
             },
             'mlflow': {

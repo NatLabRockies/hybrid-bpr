@@ -656,22 +656,26 @@ class UserItemData:
         rng = RandomState(random_state)
 
         # Designate cold items as least-interacted by total count;
-        # break ties randomly to avoid systematic bias
+        # break ties randomly to avoid systematic bias.
+        # Only items with at least one positive interaction are
+        # candidates — items without a positive can never contribute
+        # to test evaluation (eval requires Rpos_test entries).
         pos_csr = self._Rpos.tocsr()
         neg_csr = self._Rneg.tocsr()
-        item_counts = (
-            np.array(pos_csr.sum(axis=0)).flatten()
-            + np.array(neg_csr.sum(axis=0)).flatten()
-        )
-        noise = rng.uniform(0, 1e-6, size=len(item_counts))
-        sorted_by_count = np.argsort(
-            item_counts + noise, kind='stable'
-        )
-        n_cold = max(1, int(self.n_items * cold_item_ratio))
+        pos_counts = np.array(pos_csr.sum(axis=0)).flatten()
+        neg_counts = np.array(neg_csr.sum(axis=0)).flatten()
+        item_counts = pos_counts + neg_counts
+        has_pos = np.where(pos_counts > 0)[0]
+        noise = rng.uniform(0, 1e-6, size=len(has_pos))
+        sorted_by_count = has_pos[
+            np.argsort(item_counts[has_pos] + noise, kind='stable')
+        ]
+        n_cold = max(1, int(len(has_pos) * cold_item_ratio))
         cold_arr = np.sort(sorted_by_count[:n_cold])
         print(
-            f"Cold split: {n_cold}/{self.n_items} cold items"
-            f" ({cold_item_ratio:.0%})"
+            f"Cold split: {n_cold}/{len(has_pos)} cold items"
+            f" ({cold_item_ratio:.0%} of items with positives,"
+            f" {self.n_items - len(has_pos)} skipped)"
             f" | max cold interactions:"
             f" {int(item_counts[cold_arr].max())}"
         )

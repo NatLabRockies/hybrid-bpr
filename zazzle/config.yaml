@@ -3,42 +3,44 @@
 
 # Model architecture
 model:
-  n_latent: 64    # Latent factors/dimensions
+  n_latent: 128    # Latent factors/dimensions
   sparse: false   # Sparse gradients for embeddings
-  init_std: 0.1   # Weight initialization std dev
+  init_std: 0.01  # Weight initialization std dev
 
 # Optimizer
 optimizer:
-  name: 'Adam'                     # 'Adam', 'SGD', 'AdamW', 'RMSprop'
-  lr: 0.001                        # Learning rate
-  weight_decay: 0.0             # L2 regularization
+  name: 'Adagrad'
+  lr: 0.05
+  weight_decay: 0.0
 
 # Training
 training:
-  loss_function: 'bpr_loss'       # Loss function
-  n_iter: 3000                    # Training iterations
-  batch_size: 100                 # Batch size
-  eval_every: 10                  # Evaluation frequency
-  n_eval_users: 10000             # Users to evaluate (null = all)
-  n_eval_items: 1000              # Neg candidates per eval user
-  top_k: 20                       # Rank cutoff for NDCG/P/R metrics
-  early_stopping_patience: 100   # Early stopping patience
-  log_level: 1                    # Logging verbosity
+  loss_function: 'bpr_loss'
+  n_iter: 3000
+  batch_size: 100
+  eval_every: 10
+  n_eval_users:                   # null = all eval users
+  top_k: 20
+  neg_ratio: 1.0
+  early_stopping_patience: 100    # early stopping in eval units
+  log_level: 1
 
-# Data processing
+# Data
 data:
-  item_feature: 'indicator'       # 'metadata', 'indicator', 'both'
-  warm_train_ratio_pos: 0.8       # Warm split: pos train ratio
-  use_negatives: true             # Use explicit negatives in training
+  item_feature: 'metadata'
+  split_mode: 'warm'
+  cold_item_ratio: 0.2
+  warm_train_ratio: 0.8
+  use_negs_for_training: false
 
 # MLflow
 mlflow:
-  experiment_name: 'zazzle-runs'        # Experiment name
-  tracking_uri: 'sqlite:///mlflow.db'   # Tracking URI
+  experiment_name: 'zazzle-runs4'
+  tracking_uri: 'sqlite:///mlflow.db'
 
-# Parameter sweep
+# Sweep
 sweep:
-  model.n_latent: [64, 128, 256]
-  data.item_feature: ['metadata', 'indicator', 'both']
-  data.use_negatives: [false, true]
+  data.item_feature: ['indicator', 'metadata']
+  data.split_mode: ['warm', 'cold']
+  data.use_negs_for_training: [false, true]
 

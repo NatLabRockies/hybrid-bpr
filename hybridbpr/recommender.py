@@ -3,6 +3,8 @@
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import contextlib
+import time
+import random
 
 import mlflow
 import mlflow.pytorch
@@ -15,6 +17,28 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from .interactions import UserItemData
 from .mf import MatrixFactorization
+
+_LOCK_PHRASES = ('database is locked', 'TEMPORARILY_UNAVAILABLE')
+
+
+def _mlflow_log(fn: Callable, *args, **kwargs) -> None:
+    """Call fn(*args, **kwargs) with retry on SQLite lock errors."""
+    for attempt in range(12):
+        try:
+            fn(*args, **kwargs)
+            return
+        except Exception as e:
+            msg = str(e)
+            if any(p in msg for p in _LOCK_PHRASES):
+                delay = min(
+                    0.5 * (2 ** attempt)
+                    + random.uniform(0, 0.5),
+                    30.0,
+                )
+                time.sleep(delay)
+            else:
+                raise
+    fn(*args, **kwargs)  # final attempt; let it raise
 
 
 class RecommendationSystem:
@@ -103,15 +127,14 @@ class RecommendationSystem:
         self.train_users = (
             np.diff(self.Rpos_train_csr.indptr).nonzero()[0]
         )
-        # Require at least one cold pos AND one cold neg interaction
+        # Require at least one cold pos interaction; negs are
+        # random-filled from cold items in evaluate() when absent
         users_cold_pos = (
             np.diff(self.Rpos_test_csr.indptr).nonzero()[0]
         )
-        users_cold_neg = (
-            np.diff(self.Rneg_test_csr.indptr).nonzero()[0]
+        eval_users = np.intersect1d(
+            self.train_users, users_cold_pos
         )
-        users_test = np.intersect1d(users_cold_pos, users_cold_neg)
-        eval_users = np.intersect1d(self.train_users, users_test)
         cold_counts = (
             np.diff(self.Rpos_test_csr.indptr)
             + np.diff(self.Rneg_test_csr.indptr)
@@ -162,15 +185,19 @@ class RecommendationSystem:
     def _item_cache_ctx(self):
         """Pre-compute item embs/biases for non-one-hot Fi eval."""
         if not self._Fi_is_onehot:
-            # One-time matmul: (n_items, n_tags) x (n_tags, n_latent)
-            self._item_emb_cache = (
-                self.Fi_dense  # type: ignore[index]
-                @ self.model.item_latent.weight
+            # Fused matmul: single pass over Fi_dense for emb+bias
+            # (n_items, n_tags) x (n_tags, n_latent+1) then split
+            fused_w = torch.cat(
+                [
+                    self.model.item_latent.weight,
+                    self.model.item_biases.weight,
+                ],
+                dim=1,
             )
-            self._item_bias_cache = (
-                self.Fi_dense  # type: ignore[index]
-                @ self.model.item_biases.weight
-            )
+            fused = self.Fi_dense @ fused_w  # type: ignore[operator]
+            self._item_emb_cache = fused[:, :-1]
+            # Pre-squeezed: (n_items,) avoids squeeze in _score hot path
+            self._item_bias_cache = fused[:, -1]
         try:
             yield
         finally:
@@ -206,7 +233,7 @@ class RecommendationSystem:
             # Cache hit: O(batch) index into pre-computed embs
             i_t = torch.from_numpy(items).long()
             i_emb = self._item_emb_cache[i_t]
-            i_bias = self._item_bias_cache[i_t].squeeze(-1)
+            i_bias = self._item_bias_cache[i_t]
         else:
             # Training path: no cache, compute per-batch
             i_t = torch.from_numpy(items).long()
@@ -255,14 +282,12 @@ class RecommendationSystem:
             ]
             if not len(ps):
                 continue
-            # Explicit test negatives for this user
+            # Explicit test negatives for this user (may be empty;
+            # evaluate() random-fills from cold items when absent)
             neg_test = self.Rneg_test_csr.indices[
                 self.Rneg_test_csr.indptr[uid]:
                 self.Rneg_test_csr.indptr[uid + 1]
             ].copy()
-            # Only eval users with explicit test negatives
-            if not len(neg_test):
-                continue
             # Exclude all known positives from random sampling
             excl = self.Rpos_all_csr.indices[
                 self.Rpos_all_csr.indptr[uid]:
@@ -457,15 +482,15 @@ class RecommendationSystem:
                 if uid not in users_set:
                     continue
 
-                # Scale neg count by ratio vs positives; explicit first,
-                # then random fill. In cold mode, restrict random fill
-                # to cold items only to avoid warm-item contamination.
+                # Always use all explicit negs; random-fill only the
+                # shortfall up to neg_ratio * n_pos. In cold mode,
+                # restrict random fill to cold items only.
                 n_neg = max(1, round(len(ps) * neg_ratio))
                 n_explicit = len(neg_test)
-                if n_explicit >= n_neg:
-                    negs_arr = neg_test[:n_neg]
+                n_random = max(0, n_neg - n_explicit)
+                if n_random == 0:
+                    negs_arr = neg_test
                 else:
-                    n_random = n_neg - n_explicit
                     excl_set = (
                         set(excl.tolist()) | set(neg_test.tolist())
                     )
@@ -543,7 +568,7 @@ class RecommendationSystem:
             f' | eval_every={eval_every}'
         )
 
-        mlflow_mod.log_params({
+        _mlflow_log(mlflow_mod.log_params, {
             'n_iter': n_iter,
             'batch_size': batch_size,
             'eval_every': eval_every,
@@ -559,8 +584,9 @@ class RecommendationSystem:
             avg_loss = sum(
                 self._train(batch[0].numpy()) for batch in dataloader
             ) / len(dataloader)
-            mlflow_mod.log_metric(
-                'BPR_Loss-Train', avg_loss, step=epoch
+            _mlflow_log(
+                mlflow_mod.log_metric,
+                'BPR_Loss-Train', avg_loss, step=epoch,
             )
 
             # Inline progress bar
@@ -579,7 +605,9 @@ class RecommendationSystem:
                     max_users=n_eval_users,
                     neg_ratio=neg_ratio,
                 )
-                mlflow_mod.log_metrics(metrics, step=epoch)
+                _mlflow_log(
+                    mlflow_mod.log_metrics, metrics, step=epoch
+                )
 
                 current_ndcg = metrics.get(f'NDCG:{top_k}-Test', 0)
                 if current_ndcg > best_ndcg:
@@ -587,7 +615,7 @@ class RecommendationSystem:
                         current_ndcg, epoch, 0
                     )
                 else:
-                    patience_counter += eval_every
+                    patience_counter += 1
 
                 # Print eval metrics on new line
                 print(

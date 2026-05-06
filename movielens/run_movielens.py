@@ -40,7 +40,7 @@ def main() -> None:
     parser.add_argument(
         '--rating-threshold',
         type=float,
-        default=3.0,
+        default=4.0,
         help='Min rating for positive; below this = negative'
     )
     parser.add_argument(
@@ -87,6 +87,9 @@ def main() -> None:
     # item_feature comes from config; negatives always loaded
     rating_threshold = args.rating_threshold
     item_feature = pipeline.cfg.get('data.item_feature', 'metadata')
+    genome_relevance = pipeline.cfg.get(
+        'data.genome_relevance_threshold', 0.8
+    )
 
     # Build UserItemData from config defaults
     print(f"\nLoading {args.dataset} and building UserItemData...")
@@ -94,6 +97,7 @@ def main() -> None:
         dataset=args.dataset,
         rating_threshold=rating_threshold,
         item_feature=item_feature,
+        genome_relevance_threshold=genome_relevance,
     )
 
     # Factory rebuilds ui when sweep changes data.* params
@@ -103,6 +107,7 @@ def main() -> None:
             dataset=args.dataset,
             rating_threshold=rating_threshold,
             item_feature=cfg.get('data.item_feature', item_feature),
+            genome_relevance_threshold=genome_relevance,
         )
 
     # Run training or sweep
